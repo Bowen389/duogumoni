@@ -20,6 +20,15 @@ python strategies/backtest.py                                   # 复现回测
 python strategies/live.py signal --strategy A_top50             # 生成下一交易日的调仓清单
 ```
 
+## 👉 第二批策略：[`strategies2/`](strategies2/README.md)（新增，独立开发，不改动上面三个）
+
+| 策略 | 持股 / 规则 | 研究期 2023-26 年化 / 回撤 / 超额 | 样本外 2020-22 年化 / 回撤 / 超额 |
+|---|---|---|---|
+| **C_top50**（加股东户数的三模型集成） | 50 只 / 每天换 2 只 / R3 | 19.8% / −31.6% / 12.5%（IR 1.62） | 23.3% / −29.3% / 16.9%（IR 2.09） |
+| K_top3（集中 + 空仓择时） | 3 只 / 指数弱时空仓 / 开盘成交 | 20.2% / −23.2% / 11.9% | 13.0% / −35.5% / 8.9% |
+
+K_top3 对模型极其敏感：换 9 个模型变体，年化中位数约 13%，20% 是区间上沿；实盘模型最近一年模拟盘 −20.8%。**请先读 [`strategies2/README.md`](strategies2/README.md) 第 2 节再使用。**
+
 下面是完整的研究报告（v1 → v2 → 候选对比 → 稳健性检验）。
 
 ---
@@ -166,6 +175,7 @@ bash run_all.sh                   # 一键复现全部研究实验（首次约 2
 | `output/p1~p3/` | 各优先级的实验结果（CSV + 图） |
 | `output/v1/` | 第一版（Qlib 流水线）结果 |
 | `strategies/` | **可实盘的三个策略（A_top50 / A_top20 / AE_top20）：配置、每日信号、回测复现** |
+| `strategies2/` | **第二批策略（C_top50 / K_top3）：股东户数新数据、集中持仓 + 择时** |
 | `models/` | 生产模型 |
 | `setup_env.sh`, `env.sh` | 环境与数据一键准备 / 路径配置 |
 | `run_model.py`, `factor_ic.py` | v1 的 Qlib 原生脚本（需要 8GB 以上内存才能跑 Alpha158） |

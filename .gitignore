@@ -5,15 +5,23 @@ __pycache__/
 .ipynb_checkpoints/
 mlruns/
 
-# 预测文件很大（约 100MB），只保留三个策略复现回测所需的四份
+# 预测文件很大（约 100MB），只保留策略复现回测所需的几份
 output/preds/*.parquet
 !output/preds/retail_h1_neu_ind.parquet
 !output/preds/retail_h1_oos_neu_ind.parquet
 !output/preds/rb_h1_neu_ind.parquet
 !output/preds/rb_h1_oos_neu_ind.parquet
+# 第二批策略（strategies2/）复现回测所需
+!output/preds/rbh_h1_neu_ind.parquet
+!output/preds/rbh_h1_oos_neu_ind.parquet
+!output/preds/h5ens6.parquet
+!output/preds/h5ens6_oos.parquet
 
 # 实盘个人数据（持仓、每日信号）不要提交到公开仓库
 strategies/signals/
 holdings*.csv
 my_*.csv
 *.log
+
+# 第二批策略的每日调仓清单（含个人持仓，不要提交）
+strategies2/signals/
