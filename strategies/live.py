@@ -1,12 +1,14 @@
 """
 实盘工具：训练生产模型 + 每日生成调仓清单
 
-  # 1) 训练生产模型（建议每年重训一次；约 3 分钟）
-  python strategies/live.py train
+  # 1) 训练生产模型（建议每年重训一次；两个模型约 5 分钟）
+  python strategies/live.py train                 # 训练 config.MODELS 里的全部模型
+  python strategies/live.py train --model rb      # 只训练其中一个
 
   # 2) 每个交易日收盘后（先 bash setup_env.sh --refresh 更新数据）
   python strategies/live.py signal --strategy A_top50 --holdings my_holdings.csv --cash 23000
   python strategies/live.py signal --strategy A_top20 --holdings my_top20.csv --cash 5000 --etf_value 0
+  python strategies/live.py signal --strategy AE_top20 --holdings my_ae.csv --cash 8000      # 两模型集成
 
 holdings.csv 两列：code,shares   （code 可写 600000 / 600000.SH / SH600000；空仓时可不传 --holdings）
 输出 strategies/signals/{策略}_{日期}.csv，并在屏幕打印：
@@ -27,10 +29,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 from engine.common import DATA, EXTRA, KEY, read_parts  # noqa: E402
-from strategies.config import COMMON, STRATEGIES  # noqa: E402
+from strategies.config import MODELS, STRATEGIES  # noqa: E402
 
-MODEL = os.path.join(ROOT, COMMON["model_file"])
-META = MODEL.replace(".txt", ".json")
+
+def model_path(name):
+    f = os.path.join(ROOT, MODELS[name]["file"])
+    return f, f.replace(".txt", ".json")
 
 
 # ----------------------------------------------------------------------------------------------
@@ -47,6 +51,20 @@ def industry_neutral(pred):
     df["s"] = df.groupby("datetime")["score"].rank(pct=True) - 0.5
     df["s"] = df["s"] - df.groupby(["datetime", "industry"])["s"].transform("mean")
     return df[KEY + ["s"]].rename(columns={"s": "score"})
+
+
+def rank_blend(preds):
+    """多个模型：每个模型的（行业中性）打分先转成当日百分位排名，再等权平均；某模型缺分时用其余模型"""
+    if len(preds) == 1:
+        return preds[0]
+    ps, ws = [], []
+    for d in preds:
+        r = d.set_index(KEY)["score"].groupby(level=0).rank(pct=True)
+        ps.append(r)
+        ws.append(r.notna().astype(float))
+    num = pd.concat(ps, axis=1).sum(axis=1)
+    den = pd.concat(ws, axis=1).sum(axis=1)
+    return (num / den.replace(0, np.nan)).rename("score").dropna().reset_index()
 
 
 def norm_code(c):
@@ -66,34 +84,45 @@ def lot_of(inst):
 # ----------------------------------------------------------------------------------------------
 def cmd_train(a):
     from engine import model as M
-    import lightgbm as lgb  # noqa
     T = last_trading_day()
     v_end = pd.Timestamp(a.valid_end) if a.valid_end else T - pd.Timedelta(days=15)      # 标签要用未来 2 天
     v_start = pd.Timestamp(a.valid_start) if a.valid_start else v_end - pd.DateOffset(years=2)
     t_end = pd.Timestamp(a.train_end) if a.train_end else v_start - pd.Timedelta(days=15)
     t_start = pd.Timestamp(a.train_start)
-    sets = [COMMON["feature_set"]]
-    print(f"训练 {t_start.date()} ~ {t_end.date()}，验证（早停）{v_start.date()} ~ {v_end.date()}", flush=True)
-    m, cols, imp, it = M.fit(lambda: M.load(sets, t_start, t_end, 1), lambda: M.load(sets, v_start, v_end, 1),
-                             "lgb", "robust", a.threads, a.seed)
-    os.makedirs(os.path.dirname(MODEL), exist_ok=True)
-    m.save_model(MODEL, num_iteration=it)
-    meta = dict(features=cols, best_iter=int(it), train=[str(t_start.date()), str(t_end.date())],
-                valid=[str(v_start.date()), str(v_end.date())], data_last_day=str(T.date()), seed=a.seed,
-                top_features=list(imp.index[:8]))
-    json.dump(meta, open(META, "w"), ensure_ascii=False, indent=1)
-    print(f"已保存 {MODEL}  best_iter={it}  重要因子：{', '.join(imp.index[:8])}")
+    names = list(MODELS) if a.model == "all" else [a.model]
+    for name in names:
+        sets = MODELS[name]["sets"]
+        path, meta_path = model_path(name)
+        print(f"[{name}] 特征 {'+'.join(sets)}｜训练 {t_start.date()} ~ {t_end.date()}，验证（早停）{v_start.date()} ~ {v_end.date()}",
+              flush=True)
+        m, cols, imp, it = M.fit(lambda: M.load(sets, t_start, t_end, 1), lambda: M.load(sets, v_start, v_end, 1),
+                                 "lgb", "robust", a.threads, a.seed)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        m.save_model(path, num_iteration=it)
+        meta = dict(sets=sets, features=cols, best_iter=int(it), train=[str(t_start.date()), str(t_end.date())],
+                    valid=[str(v_start.date()), str(v_end.date())], data_last_day=str(T.date()), seed=a.seed,
+                    top_features=list(imp.index[:8]))
+        json.dump(meta, open(meta_path, "w"), ensure_ascii=False, indent=1)
+        print(f"[{name}] 已保存 {path}  best_iter={it}  重要因子：{', '.join(imp.index[:8])}", flush=True)
 
 
-def predict(start, end):
+def predict(start, end, names=("retail",)):
+    """返回（多模型集成后的）行业中性打分，以及各模型的 meta"""
     import lightgbm as lgb
     from engine import model as M
-    if not os.path.exists(MODEL):
-        sys.exit(f"找不到模型 {MODEL}，请先运行：python strategies/live.py train")
-    meta = json.load(open(META))
-    m = lgb.Booster(model_file=MODEL)
-    m.best_iteration = meta["best_iter"]
-    return M.predict_range(m, meta["features"], [COMMON["feature_set"]], start, end, 1, "lgb"), meta
+    preds, metas = [], {}
+    for name in names:
+        path, meta_path = model_path(name)
+        if not os.path.exists(path):
+            sys.exit(f"找不到模型 {path}，请先运行：python strategies/live.py train --model {name}")
+        meta = json.load(open(meta_path))
+        m = lgb.Booster(model_file=path)
+        m.best_iteration = meta["best_iter"]
+        sets = meta.get("sets", MODELS[name]["sets"])
+        raw = M.predict_range(m, meta["features"], sets, start, end, 1, "lgb")
+        preds.append(industry_neutral(raw))
+        metas[name] = meta
+    return rank_blend(preds), metas
 
 
 def r3_state(excess, cfg):
@@ -135,8 +164,7 @@ def cmd_signal(a):
     cfg = STRATEGIES[a.strategy]
     T = pd.Timestamp(a.date) if a.date else last_trading_day()
     start = T - pd.Timedelta(days=a.r3_lookback)
-    raw, meta = predict(start - pd.Timedelta(days=40), T)
-    pred = industry_neutral(raw)
+    pred, metas = predict(start - pd.Timedelta(days=40), T, cfg["models"])
     if pred["datetime"].max() < T:
         sys.exit(f"{T.date()} 没有因子数据，请先运行 bash setup_env.sh --refresh")
 
@@ -209,7 +237,9 @@ def cmd_signal(a):
     # ---- 打印
     pd.set_option("display.width", 200); pd.set_option("display.unicode.east_asian_width", True)
     print(f"\n==== {a.strategy}｜信号日 {T.date()}｜在下一交易日尾盘集合竞价成交 ====")
-    print(f"模型：训练 {meta['train'][0]}~{meta['train'][1]}，best_iter={meta['best_iter']}")
+    for name, meta in metas.items():
+        print(f"模型 {name}：{'+'.join(meta.get('sets', MODELS[name]['sets']))}，训练 {meta['train'][0]}~{meta['train'][1]}，"
+              f"best_iter={meta['best_iter']}" + ("（多模型：排名等权平均）" if len(metas) > 1 else ""))
     print(f"账户：股票 {stock_value:,.0f} + 现金 {a.cash:,.0f} + ETF {a.etf_value:,.0f} = {total:,.0f}；"
           f"持仓 {len(hold)} 只 / 目标 {cfg['topk']} 只")
     print(f"R3：模拟盘超额回撤 {dd:+.1%}（阈值 {cfg['r3_in']:.0%} 进 / {cfg['r3_out']:.0%} 出），"
@@ -235,6 +265,7 @@ def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     t = sub.add_parser("train", help="训练生产模型")
+    t.add_argument("--model", choices=["all"] + list(MODELS), default="all")
     t.add_argument("--train_start", default="2015-01-01")
     t.add_argument("--train_end")
     t.add_argument("--valid_start")

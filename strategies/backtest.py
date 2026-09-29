@@ -3,10 +3,12 @@
 
   python strategies/backtest.py                    # 用仓库自带的预测文件（与 README 数字一致）
   python strategies/backtest.py --pred my_preds    # 用自己训练的预测（output/preds/my_preds.parquet，会自动做行业中性）
+  python strategies/backtest.py --strategies AE_top20
 
 两段检验：
-  研究期  2023-01 ~ 2026-09  模型用 2015-2020 训练、2021-2022 早停（retail_h1_neu_ind）
-  样本外  2020-01 ~ 2022-12  模型用 2015-2018 训练、2019 早停（retail_h1_oos_neu_ind）；这 3 年从未参与任何方案选择
+  研究期  2023-01 ~ 2026-09  模型用 2015-2020 训练、2021-2022 早停
+  样本外  2020-01 ~ 2022-12  模型用 2015-2018 训练、2019 早停；这 3 年从未参与任何方案选择
+  预测文件见 config.RESEARCH_PREDS（多模型策略会把各模型的预测按排名等权平均）
 输出 strategies/results/：summary.csv、yearly.csv、monthly_excess_{策略}_{区间}.csv、daily_{策略}_{区间}.csv、nav_{区间}.png
 """
 import argparse
@@ -20,8 +22,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 from engine.backtest import Backtester  # noqa: E402
-from strategies.config import STRATEGIES  # noqa: E402
-from strategies.live import industry_neutral  # noqa: E402
+from strategies.config import RESEARCH_PREDS, STRATEGIES  # noqa: E402
+from strategies.live import industry_neutral, rank_blend  # noqa: E402
 
 N_YEAR = 238
 
@@ -51,24 +53,36 @@ def main():
     ap.add_argument("--pred", help="自定义预测（output/preds/ 下的文件名，不带扩展名）")
     ap.add_argument("--start", default="2023-01-01")
     ap.add_argument("--end", default="2026-09-18")
+    ap.add_argument("--strategies", help="只跑部分策略，逗号分隔，如 A_top50,AE_top20")
     a = ap.parse_args()
     out = "strategies/results"
     os.makedirs(out, exist_ok=True)
 
+    cache = {}
+
+    def research_pred(names, k):   # k=0 研究期 / 1 样本外；多模型 → 排名等权平均
+        key = (tuple(names), k)
+        if key not in cache:
+            cache[key] = rank_blend([pd.read_parquet(f"output/preds/{RESEARCH_PREDS[n][k]}.parquet") for n in names])
+        return cache[key]
+
     if a.pred:
-        p = pd.read_parquet(f"output/preds/{a.pred}.parquet")
-        periods = {"自定义": (a.start, a.end, industry_neutral(p))}
+        p = industry_neutral(pd.read_parquet(f"output/preds/{a.pred}.parquet"))
+        periods = {"自定义": (a.start, a.end, lambda cfg: p)}
     else:
-        periods = {"研究期2023-26": ("2023-01-01", "2026-09-18", pd.read_parquet("output/preds/retail_h1_neu_ind.parquet")),
-                   "样本外2020-22": ("2020-01-01", "2022-12-31", pd.read_parquet("output/preds/retail_h1_oos_neu_ind.parquet"))}
+        periods = {"研究期2023-26": ("2023-01-01", "2026-09-18", lambda cfg: research_pred(cfg["models"], 0)),
+                   "样本外2020-22": ("2020-01-01", "2022-12-31", lambda cfg: research_pred(cfg["models"], 1))}
 
     FTAG = {"研究期2023-26": "insample_2023_26", "样本外2020-22": "oos_2020_22", "自定义": "custom"}
     rows, yearly = [], []
-    for per, (s, e, pred) in periods.items():
+    for per, (s, e, pred_of) in periods.items():
         ft = FTAG[per]
         bt = Backtester(s, e)
         curves = {}
         for name, cfg in STRATEGIES.items():
+            if a.strategies and name not in a.strategies.split(","):
+                continue
+            pred = pred_of(cfg)
             r = run(bt, pred, cfg)
             rs = run(bt, pred, cfg, slip=0.001)
             m, ms = bt.metrics(r), bt.metrics(rs)

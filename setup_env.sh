@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 一键准备环境与数据（在仓库根目录运行）
-#   bash setup_env.sh              # Python 环境 + Qlib 数据 + 行业 + 面板 + 散户因子（策略 A 所需，约 5 分钟）
+#   bash setup_env.sh              # Python 环境 + Qlib 数据 + 行业 + 面板 + 散户因子 + 长期犯错因子（三个策略所需，约 6 分钟）
 #   bash setup_env.sh --refresh    # 每日收盘后：重新下载最新 Qlib 数据并重建面板/因子（实盘用）
 #   bash setup_env.sh --alpha158   # 另外构建 Alpha158 因子（研究实验需要，约 20 分钟）
 set -e
@@ -35,5 +35,6 @@ mkdir -p "$RA_EXTRA"
 if [ $REFRESH = 1 ] || [ ! -f "$RA_EXTRA/industry.parquet" ]; then python data_fetch/fetch_industry.py; fi
 if [ $REFRESH = 1 ] || [ ! -d "$RA_DATA/panel" ]; then python -m engine.panel; fi
 if [ $REFRESH = 1 ] || [ ! -d "$RA_DATA/feat_retail" ]; then python -m engine.features --set retail; fi
+if [ $REFRESH = 1 ] || [ ! -d "$RA_DATA/feat_behavior" ]; then python -m engine.features --set behavior; fi   # AE_top20 需要
 if [ $A158 = 1 ]; then python -m engine.features --set alpha158 --chunk 50; fi
 echo SETUP_DONE
