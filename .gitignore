@@ -1,0 +1,17 @@
+# Python / 环境
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+mlruns/
+
+# 预测文件很大（约 100MB），只保留两个策略复现回测所需的两份
+output/preds/*.parquet
+!output/preds/retail_h1_neu_ind.parquet
+!output/preds/retail_h1_oos_neu_ind.parquet
+
+# 实盘个人数据（持仓、每日信号）不要提交到公开仓库
+strategies/signals/
+holdings*.csv
+my_*.csv
+*.log

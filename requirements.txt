@@ -1,0 +1,10 @@
+# Python 3.8 ~ 3.12（pyqlib 暂不支持 3.13）
+pyqlib>=0.9.7
+lightgbm
+xgboost
+pandas
+numpy
+pyarrow
+matplotlib
+baostock   # 换手率 / ST / 行业
+akshare    # 龙虎榜
