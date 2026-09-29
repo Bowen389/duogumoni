@@ -48,6 +48,13 @@ python experiments/h_robust.py weights
 python experiments/h_robust.py oos
 python experiments/topk.py
 
+# 5b) 提高收益的方案（中证1000内）
+python -m engine.features --set behavior
+bash experiments/train_boost.sh
+python experiments/behavior_ic.py
+python experiments/boost.py
+python experiments/strategy_b.py
+
 # 5) 最终策略
 python strategies/backtest.py
 python strategies/live.py train

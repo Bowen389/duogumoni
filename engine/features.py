@@ -17,6 +17,9 @@ def get_config(name):
     if name == "retail":
         from retail_factors import retail_feature_config
         return retail_feature_config()
+    if name == "behavior":
+        from retail_factors import behavior_feature_config
+        return behavior_feature_config()
     if name == "alpha158":
         from qlib.contrib.data.loader import Alpha158DL
         conf = {"kbar": {}, "price": {"windows": [0], "feature": ["OPEN", "HIGH", "LOW", "VWAP"]}, "rolling": {}}
@@ -33,10 +36,13 @@ def build(name, chunk=100, kernels=1):
     out = os.path.join(DATA, f"feat_{name}")
     shutil.rmtree(out, ignore_errors=True)
     os.makedirs(out)
-    member = read_parts(os.path.join(DATA, "panel"), columns=["datetime", "instrument", "in_pool"], start="2015-01-01")
-    member = member[member["in_pool"]].drop(columns="in_pool")
+    import pyarrow.dataset as ds
     for k in range(0, len(codes), chunk):
         cc = codes[k:k + chunk]
+        # 每批只读这批股票的成员表（全市场股票池时整表放不进 2GB 内存）
+        member = read_parts(os.path.join(DATA, "panel"), columns=["datetime", "instrument", "in_pool"], start="2015-01-01",
+                            filters_extra=ds.field("instrument").isin(cc) & ds.field("in_pool"))
+        member = member.drop(columns="in_pool")
         df = D.features(cc, fields, START, END).astype("float32")
         df.columns = names
         df = df.reset_index()

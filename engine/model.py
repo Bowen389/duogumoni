@@ -112,8 +112,10 @@ def load(sets, start, end, horizon, sample=1, with_label=True):
     names_flat = [n for ns in names_all for n in ns]
     y = None
     if with_label:
-        lab = read_parts(os.path.join(DATA, "panel"), columns=KEY + ["in_pool", "nb", f"ret{horizon}"], start=start,
-                         end=end, filters_extra=flt)
+        # RA_LABEL / RA_NB 可切换标签口径，例如开盘成交：RA_LABEL=reto1 RA_NB=nbo
+        lcol, ncol = os.environ.get("RA_LABEL", f"ret{horizon}"), os.environ.get("RA_NB", "nb")
+        lab = read_parts(os.path.join(DATA, "panel"), columns=KEY + ["in_pool", ncol, lcol], start=start,
+                         end=end, filters_extra=flt).rename(columns={lcol: f"ret{horizon}", ncol: "nb"})
         lab = lab[lab["in_pool"] & (lab["datetime"] >= pd.Timestamp("2015-01-01"))].reset_index(drop=True)
         if TRADABLE_LABEL:   # 次日买不进（涨停/停牌）的样本不参与训练，避免学到"追涨停"这种执行不了的规律
             lab.loc[lab["nb"], f"ret{horizon}"] = np.nan

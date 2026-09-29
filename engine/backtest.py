@@ -37,6 +37,19 @@ class Backtester:
         self.px = wide("raw_close").ffill().astype("float32")   # 未复权价：用于一手 100 股取整
         self.change = wide("change").astype("float32")
         self.block_board = self.block.copy()
+        self.has_open = False
+        try:   # 开盘成交所需字段（新版面板才有）
+            q = read_parts(os.path.join(DATA, "panel"), columns=["datetime", "instrument", "ret_on", "ret_id", "up_open",
+                                                                  "dn_open", "raw_open"], start=pre, end=self.end)
+            wq = lambda c: q.pivot(index="datetime", columns="instrument", values=c).reindex(index=self.dates, columns=self.insts)  # noqa
+            self.R_on, self.R_id = wq("ret_on").fillna(0.0).astype("float32"), wq("ret_id").fillna(0.0).astype("float32")
+            self.block_open = (wq("up_open").fillna(False) | wq("dn_open").fillna(False) |
+                               wide("susp").reindex(columns=self.insts).fillna(True)).astype(bool)
+            self.px_open = wq("raw_open").ffill().astype("float32")
+            self.has_open = True
+            del q
+        except Exception:  # noqa
+            pass
         del p
 
     def use_limit_rule(self, rule="board"):
@@ -50,13 +63,16 @@ class Backtester:
     # ------------------------------------------------------------------
     def run(self, pred, mode="dropout", topk=50, n_drop=5, rebalance=5, buffer=1.5,
             open_cost=0.0005, close_cost=0.0010, slip=0.0, risk_degree=0.95, account=1e6, lot=True,
-            min_cost=5.0, every=1):
+            min_cost=5.0, every=1, exec_at="close"):
         S = pred.pivot(index="datetime", columns="instrument", values="score")
         S = S.reindex(index=self.dates, columns=self.insts)
         S = S.where(self.inpool)                    # 只在股票池内选
         test_dates = [d for d in self.dates if d >= self.start]
         i0 = self.dates.index(test_dates[0])
         Rv, Bv, Sv, Pv = self.R.values, self.block.values, S.values, self.px.values
+        at_open = exec_at == "open"
+        if at_open:   # T 日收盘出信号 → T+1 开盘成交：先吃隔夜收益，再交易，再吃日内收益
+            Ron, Rid, Bv, Pv = self.R_on.values, self.R_id.values, self.block_open.values, self.px_open.values
         lot_size = np.array([200 if str(c).startswith("SH688") else 100 for c in self.insts])
         col = {c: j for j, c in enumerate(self.insts)}
         oc, cc = open_cost + slip, close_cost + slip
@@ -67,7 +83,7 @@ class Backtester:
         for t in range(i0, len(self.dates)):
             # 1) 盯市
             for j in hold:
-                hold[j] *= 1.0 + Rv[t, j]
+                hold[j] *= 1.0 + (Ron[t, j] if at_open else Rv[t, j])
             v0 = cash + sum(hold.values())
             s = Sv[t - 1]                              # 前一日分数
             valid = ~np.isnan(s)
@@ -122,6 +138,9 @@ class Backtester:
                         cash -= amt + f
                         traded += amt
                         fee += f
+            if at_open:
+                for j in hold:
+                    hold[j] *= 1.0 + Rid[t, j]
             v1 = cash + sum(hold.values())
             rec.append((self.dates[t], v1, traded / max(v0, 1), fee / max(v0, 1), len(hold)))
         df = pd.DataFrame(rec, columns=["datetime", "value", "turnover", "cost", "n_hold"]).set_index("datetime")

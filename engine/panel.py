@@ -63,6 +63,18 @@ def build(chunk=250):
         # 次日（成交日）买不进：涨停或停牌 —— 这些样本的标签不可实现，训练时剔除
         blk = (df["up_lim"] | df["susp"]).astype(float)
         df["nb"] = g_blk = blk.groupby(df["instrument"], sort=False).shift(-1).fillna(1.0).astype(bool)
+        # 开盘成交口径：开盘一字涨/跌停不能买/卖；标签 = T+1 开盘买入、T+2 开盘卖出
+        raw_open = df["open"] / df["factor"]
+        df["up_open"] = (raw_open >= up_p - 0.0051) & ~df["susp"]
+        df["dn_open"] = (raw_open <= dn_p + 0.0051) & ~df["susp"]
+        df["ret_on"] = (df["open"] / g["close"].shift(1) - 1).astype("float32")     # 隔夜
+        df["ret_id"] = (df["close"] / df["open"] - 1).astype("float32")             # 日内
+        df.loc[df["susp"], ["ret_on", "ret_id"]] = 0.0
+        df["raw_open"] = raw_open.astype("float32")
+        blk_o = (df["up_open"] | df["susp"]).astype(float)
+        df["nbo"] = blk_o.groupby(df["instrument"], sort=False).shift(-1).fillna(1.0).astype(bool)
+        o1 = g["open"].shift(-1)
+        df["reto1"] = (g["open"].shift(-2) / o1 - 1).astype("float32")
         c1 = g["close"].shift(-1)
         df["ret1"] = (g["close"].shift(-2) / c1 - 1).astype("float32")
         df["ret5"] = (g["close"].shift(-6) / c1 - 1).astype("float32")

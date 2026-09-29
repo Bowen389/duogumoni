@@ -39,6 +39,32 @@ RETAIL_FACTORS = [
 ]
 
 
+# 散户"长期反复犯的错"（窗口 60~250 日）。方向统一为：数值越大，理论上未来收益越好；不确定方向的按原值给出，由 IC 检验
+BEHAVIOR_FACTORS = [
+    # ---------- 6. 处置效应：赚了急着卖、亏了死扛（Grinblatt-Han 资本利得悬置 CGO，参考价 = 成交量加权成本） ----------
+    ("$close/(Sum($close*$volume,60)/(Sum($volume,60)+1e-12))-1",   "CGO60",    "近60日持仓浮盈：浮盈大→散户急于卖出→价格被压低"),
+    ("$close/(Sum($close*$volume,250)/(Sum($volume,250)+1e-12))-1", "CGO250",   "近一年持仓浮盈"),
+    # ---------- 7. 锚定：盯着一年高点/低点 ----------
+    ("$close/Max($high,250)-1",                                     "HIGH250",  "离一年高点的距离：接近高点时散户不敢买（锚定）"),
+    ("-1*($close/Min($low,250)-1)",                                 "LOW250",   "离一年低点的距离：远离低点=涨多了"),
+    # ---------- 8. 长期过度反应 / 外推 ----------
+    ("-1*($close/Ref($close,120)-1)",                               "REV120",   "半年反转：散户对趋势外推过度"),
+    ("-1*Sum(If(Gt($change,0),1,0),10)/10",                         "UPDAYS10", "近10日上涨天数占比：连涨→外推买入"),
+    # ---------- 9. 注意力与过度交易（长窗口） ----------
+    ("-1*Sum(If(Gt($volume,2*Mean($volume,60)),1,0),60)",           "ATTN60",   "近60日爆量天数：反复被关注"),
+    ("-1*Mean($volume,20)/(Mean($volume,250)+1e-12)",               "ABVOL250", "成交量相对一年均值：过度自信期"),
+    ("-1*Sum(If(Gt(Abs($change),0.07),1,0),60)",                    "EXTREME60","近60日大波动天数：彩票属性"),
+    ("-1*Sum(If(Gt($change,0),$volume,0),20)/(Sum($volume,20)+1e-12)", "UPVOL20", "上涨日成交占比：散户只在上涨时买"),
+    # ---------- 10. 恐慌 ----------
+    ("Sum(If(Lt($change,-0.095),1,0),20)",                          "DNLIM20",  "近20日跌停次数：散户恐慌抛售后的反弹"),
+    ("-1*Min($change,20)",                                          "MIN20",    "近20日最大单日跌幅（取负）：恐慌程度"),
+]
+
+
+def behavior_feature_config():
+    return [f for f, _, _ in BEHAVIOR_FACTORS], [n for _, n, _ in BEHAVIOR_FACTORS]
+
+
 def retail_feature_config():
     fields = [f for f, _, _ in RETAIL_FACTORS]
     names = [n for _, n, _ in RETAIL_FACTORS]
