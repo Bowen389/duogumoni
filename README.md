@@ -29,6 +29,11 @@ python strategies/live.py signal --strategy A_top50             # 生成下一�
 
 K_top3 对模型极其敏感：换 9 个模型变体，年化中位数约 13%，20% 是区间上沿；实盘模型最近一年模拟盘 −20.8%。**请先读 [`strategies2/README.md`](strategies2/README.md) 第 2 节再使用。**
 
+## 👉 模拟盘：[`paper/`](paper/README.md)（GitHub Actions 每个交易日 17:00 自动运行）
+
+A_top50 / A_top20 / AE_top20 / C_top50 / K_top3 / 机会仓 FB_dip 各开一个 **10 万元**独立模拟账户，每天按各自 `signal` 工具的清单成交、记账、出下一日清单。
+总览和下一交易日清单见 [`paper/README.md`](paper/README.md)，规则说明见 [`paper/HOWTO.md`](paper/HOWTO.md)。
+
 下面是完整的研究报告（v1 → v2 → 候选对比 → 稳健性检验）。
 
 ---

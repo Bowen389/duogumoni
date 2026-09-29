@@ -25,3 +25,6 @@ my_*.csv
 
 # 第二批策略的每日调仓清单（含个人持仓，不要提交）
 strategies2/signals/
+
+# 模拟盘运行时的临时持仓文件
+paper/.tmp/
