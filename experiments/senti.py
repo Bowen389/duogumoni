@@ -24,7 +24,7 @@ os.chdir(ROOT)
 from engine.common import DATA, KEY  # noqa: E402
 
 PCOLS = ["datetime", "instrument", "open", "high", "low", "close", "raw_close", "change", "factor", "amount", "lim",
-         "up_lim", "dn_lim", "susp", "in_pool", "ret", "ret_on", "up_open", "nbo"]
+         "up_lim", "dn_lim", "susp", "in_pool", "ret", "ret_on", "ret_id", "up_open", "dn_open", "nbo"]
 STOCK_F = ["LB", "UP0", "TOUCH0", "ZB0", "NUP10", "R1", "R3", "R5", "DH20", "AMP", "CPOS", "GAP", "VR5", "VR20"]
 MKT_F = ["M_UP", "M_DN", "M_ZB", "M_LBMAX", "M_LB2", "M_RELAY", "M_RELAY_ON", "M_BREADTH", "M_MED", "M_BIGDN", "M_AMT"]
 WF = {"滚动近一年": dict(train=("2015-01-01", "2023-08-31"), valid=("2023-09-01", "2025-09-12"),
@@ -76,6 +76,16 @@ def build():
         y3 = (c3 / o1 - 1).astype("float32")
         y3[p["nbo"]] = np.nan
         f["y3"] = y3
+        # 方案 C 标签。yon：T 日收盘买（收盘封涨停/停牌买不进 → 剔除）→ T+1 开盘卖（开盘一字跌停/停牌卖不出 → 按 T+1 收盘卖）
+        c1 = g["close"].shift(-1)
+        nsell = (g["dn_open"].shift(-1).fillna(False) | g["susp"].shift(-1).fillna(False)).astype(bool)
+        yon = pd.Series(np.where(nsell, c1 / c - 1, o1 / c - 1), index=p.index).astype("float32")
+        yon[p["up_lim"] | p["susp"]] = np.nan
+        f["yon"] = yon
+        # yid：T+1 开盘买（一字涨停/停牌买不进 → 剔除）→ T+1 收盘卖（需要底仓做 T）
+        yid = (c1 / o1 - 1).astype("float32")
+        yid[p["nbo"]] = np.nan
+        f["yid"] = yid
         # 下一日开盘到收盘 / 隔夜，用于检查
         f["in_pool"] = p["in_pool"]
         stock_parts.append(f[p["in_pool"]].reset_index(drop=True))
@@ -136,7 +146,7 @@ def build():
 
 
 # ------------------------------------------------------------------ train
-def load_xy(start, end, sample=1, need_y=True):
+def load_xy(start, end, sample=1, need_y=True, ycol="y3"):
     """省内存版：原有散户+行为因子矩阵 + 个股短线特征 + 市场情绪，按索引对齐写入预分配矩阵（不做 DataFrame 合并）"""
     import gc
     from engine import model as EM
@@ -144,14 +154,14 @@ def load_xy(start, end, sample=1, need_y=True):
     dt = keys["datetime"].values
     ins = pd.Categorical(keys["instrument"].values)
     del keys
-    S = pd.read_parquet(os.path.join(DATA, "senti_stock.parquet"), columns=KEY + STOCK_F + ["y3"],
+    S = pd.read_parquet(os.path.join(DATA, "senti_stock.parquet"), columns=KEY + STOCK_F + [ycol],
                         filters=[("datetime", ">=", pd.Timestamp(start)), ("datetime", "<=", pd.Timestamp(end))])
     S = S[S["instrument"].isin(ins.categories)].reset_index(drop=True)
     S = S.drop_duplicates(KEY).reset_index(drop=True)
     sidx = pd.MultiIndex.from_arrays([S["datetime"].values, pd.Categorical(S["instrument"].values, categories=ins.categories)])
     pos = sidx.get_indexer(pd.MultiIndex.from_arrays([dt, ins]))
     del sidx
-    y = np.where(pos >= 0, S["y3"].values[np.maximum(pos, 0)], np.nan).astype("float32")
+    y = np.where(pos >= 0, S[ycol].values[np.maximum(pos, 0)], np.nan).astype("float32")
     keep = ~np.isnan(y) if need_y else np.ones(len(y), dtype=bool)
     M = pd.read_parquet(os.path.join(DATA, "senti_market.parquet")).set_index("datetime")
     mcols = list(M.columns)
@@ -255,7 +265,10 @@ def simulate(mk, rkS, ordS, k=3, M=60, hold=0, exec_at="open", timing=None, buy_
         sells, keeps = [], []
         for x, h in hd.items():
             want = (not on) or not m["in_pool"][i, x] or ((h >= hold) if hold else (rk.get(x, 1e9) > M))
-            blocked = m["susp"][i, x] or (m["dn_lim"][i, x] if exec_at == "close" else m["dn_open"][i, x])
+            if exec_at == "mixed":     # 前一日尾盘卖出（用前一日收盘前的信号近似）：看前一日是否跌停/停牌
+                blocked = m["susp"][i - 1, x] or m["dn_lim"][i - 1, x]
+            else:
+                blocked = m["susp"][i, x] or (m["dn_lim"][i, x] if exec_at == "close" else m["dn_open"][i, x])
             (sells if want and not blocked else keeps).append(x)
         buys = []
         if on and k - len(keeps) > 0:
@@ -273,8 +286,9 @@ def simulate(mk, rkS, ordS, k=3, M=60, hold=0, exec_at="open", timing=None, buy_
         else:
             for x in keeps:
                 r += w * m["ret"][i, x]
-            for x in sells:
-                r += w * m["ret_on"][i, x]
+            if exec_at != "mixed":     # mixed：卖出已在前一日尾盘完成，今天不再承担隔夜
+                for x in sells:
+                    r += w * m["ret_on"][i, x]
             for x in buys:
                 r += w * m["ret_id"][i, x]
         r -= w * (len(sells) * (sell_cost + slip) + len(buys) * (buy_cost + slip))
