@@ -244,6 +244,11 @@ class Account:
                              成本="", 浮动盈亏="", 买入日期=""))
         pd.DataFrame(rows, columns=["代码", "名称", "股数", "现价", "市值", "成本", "浮动盈亏", "买入日期"]).to_csv(
             os.path.join(self.dir, "positions.csv"), index=False, encoding="utf-8-sig")
+        if self.s.get("last_date"):      # 每天的收盘持仓另存一份到当天的清单文件夹（日报用）
+            dd = os.path.join(SIG_DIR, self.s["last_date"])
+            os.makedirs(dd, exist_ok=True)
+            pd.DataFrame(rows, columns=["代码", "名称", "股数", "现价", "市值", "成本", "浮动盈亏", "买入日期"]).to_csv(
+                os.path.join(dd, f"{self.name}_positions.csv"), index=False, encoding="utf-8-sig")
 
 
 # ============================================================================ 成交逻辑
@@ -636,6 +641,9 @@ def summary():
           "## 下一交易日操作清单", *orders, "",
           "> 仅供学习研究，不构成投资建议。模拟盘按收盘/开盘价成交，未计冲击成本，实盘会有差距。"]
     open(os.path.join(PAPER, "README.md"), "w", encoding="utf-8").write("\n".join(md) + "\n")
+    sys.path.insert(0, PAPER)
+    import report                    # 每日日报 + 历史总览（paper/report.py）
+    report.build(STRATS, "模拟盘")
     print("\n".join(rows))
 
 
