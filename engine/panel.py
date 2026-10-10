@@ -13,7 +13,8 @@ import shutil
 import numpy as np
 import pandas as pd
 
-from engine.common import DATA, START, END, POOL, BENCH, init_qlib, pool_spans, limit_pct
+from engine.common import DATA, START, END, POOL, BENCH, init_qlib, pool_spans
+from engine.security import status_for, limit_flags
 
 FIELDS = ["$open", "$high", "$low", "$close", "$volume", "$amount", "$change", "$factor"]
 NAMES = ["open", "high", "low", "close", "volume", "amount", "change", "factor"]
@@ -54,24 +55,24 @@ def build(chunk=250):
         df["ret"] = (df["close"] / g["close"].shift(1) - 1).astype("float32")
         df.loc[df["susp"], "ret"] = 0.0
         df["raw_close"] = (df["close"] / df["factor"]).astype("float32")
-        df["lim"] = limit_pct(df["instrument"], df["datetime"])
-        prev_raw = df["raw_close"] / (1 + df["change"])
-        up_p = np.round(prev_raw * (1 + df["lim"]) + 1e-6, 2)
-        dn_p = np.round(prev_raw * (1 - df["lim"]) + 1e-6, 2)
-        df["up_lim"] = ((df["raw_close"] >= up_p - 0.0051) | (df["change"] >= df["lim"] - 0.0015)) & ~df["susp"]
-        df["dn_lim"] = ((df["raw_close"] <= dn_p + 0.0051) | (df["change"] <= -df["lim"] + 0.0015)) & ~df["susp"]
+        status = status_for(df)
+        for c in status:
+            df[c] = status[c]
+        df["susp"] |= df["tradestatus"].eq(0)
+        raw_open = df["open"] / df["factor"]
+        for c, values in limit_flags(df["instrument"], df["datetime"], df["raw_close"], raw_open,
+                                     df["change"], df["susp"], df["is_st"], df["status_known"]).items():
+            df[c] = values
         # 次日（成交日）买不进：涨停或停牌 —— 这些样本的标签不可实现，训练时剔除
-        blk = (df["up_lim"] | df["susp"]).astype(float)
+        blk = (df["up_lim"] | df["susp"] | ~df["buy_ok"]).astype(float)
         df["nb"] = g_blk = blk.groupby(df["instrument"], sort=False).shift(-1).fillna(1.0).astype(bool)
         # 开盘成交口径：开盘一字涨/跌停不能买/卖；标签 = T+1 开盘买入、T+2 开盘卖出
         raw_open = df["open"] / df["factor"]
-        df["up_open"] = (raw_open >= up_p - 0.0051) & ~df["susp"]
-        df["dn_open"] = (raw_open <= dn_p + 0.0051) & ~df["susp"]
         df["ret_on"] = (df["open"] / g["close"].shift(1) - 1).astype("float32")     # 隔夜
         df["ret_id"] = (df["close"] / df["open"] - 1).astype("float32")             # 日内
         df.loc[df["susp"], ["ret_on", "ret_id"]] = 0.0
         df["raw_open"] = raw_open.astype("float32")
-        blk_o = (df["up_open"] | df["susp"]).astype(float)
+        blk_o = (df["up_open"] | df["susp"] | ~df["buy_ok"]).astype(float)
         df["nbo"] = blk_o.groupby(df["instrument"], sort=False).shift(-1).fillna(1.0).astype(bool)
         o1 = g["open"].shift(-1)
         df["reto1"] = (g["open"].shift(-2) / o1 - 1).astype("float32")

@@ -89,12 +89,16 @@ def predict(start, end, names, neutral=True):
 # ----------------------------------------------------------------------------------------------
 def signal_dropout(a, cfg):
     """C_top50：与 A 系列完全相同的下单逻辑（复用 strategies/live.py 的 cmd_signal），只是换成三模型集成"""
-    A.STRATEGIES = dict(A.STRATEGIES, **{a.strategy: cfg})
-    A.MODELS = dict(A.MODELS, **{k: MODELS[k] for k in cfg["models"]})
-    A.predict = lambda s, e, names: predict(s, e, names, neutral=True)
-    a.r3_lookback = a.lookback
-    a.day_index = 0
-    A.cmd_signal(a)
+    originals = A.STRATEGIES, A.MODELS, A.predict
+    try:
+        A.STRATEGIES = dict(A.STRATEGIES, **{a.strategy: cfg})
+        A.MODELS = dict(A.MODELS, **{k: MODELS[k] for k in cfg["models"]})
+        A.predict = lambda s, e, names: predict(s, e, names, neutral=True)
+        a.r3_lookback = a.lookback
+        a.day_index = 0
+        return A.cmd_signal(a)
+    finally:
+        A.STRATEGIES, A.MODELS, A.predict = originals
 
 
 def vote_state(T, mas, need):
@@ -115,7 +119,7 @@ def signal_concentrated(a, cfg):
     on, above = vote_state(T, cfg["timing_mas"], cfg["timing_need"])
 
     px = read_parts(os.path.join(DATA, "panel"), columns=["datetime", "instrument", "raw_close", "up_lim", "dn_lim", "susp",
-                                                          "in_pool"], start=T, end=T).set_index("instrument")
+                                                          "in_pool", "buy_ok", "is_st", "is_delisted"], start=T, end=T).set_index("instrument")
     names = pd.read_parquet(os.path.join(EXTRA, "industry.parquet")).set_index("instrument")
     if a.holdings:
         h = pd.read_csv(a.holdings, dtype={"code": str})
@@ -140,7 +144,7 @@ def signal_concentrated(a, cfg):
     val = pd.Series({j: hold[j] * float(np.nan_to_num(px["raw_close"].get(j, np.nan))) for j in hold.index}, dtype=float)
     total = float(val.sum()) + cash
 
-    score = pred[pred["datetime"] == T].set_index("instrument")["score"].sort_values(ascending=False)
+    score = A.signal_score(pred[pred["datetime"] == T].set_index("instrument")["score"], px).sort_values(ascending=False, kind="stable")
     rank = pd.Series(np.arange(1, len(score) + 1), index=score.index)
     sell, keep_list = [], []
     for j in hold.index:
@@ -149,7 +153,7 @@ def signal_concentrated(a, cfg):
                f"排名 {r} 跌出前 {keep}" if r > keep else "")
         (sell if why else keep_list).append((j, why))
     n_free = k - len(keep_list) if on else 0
-    cands = [j for j in score.index if j not in hold.index and not bool(px["susp"].get(j, False))]
+    cands = [j for j in score.index if j not in hold.index and bool(px["buy_ok"].get(j, False))]
     buy, backup = cands[:max(n_free, 0)], cands[max(n_free, 0):max(n_free, 0) + 5]
     slot = total / k
 
@@ -157,7 +161,7 @@ def signal_concentrated(a, cfg):
         p = float(px["raw_close"].get(j, np.nan))
         if shares is None:
             lot = lot_of(j)
-            shares = int(np.floor(slot / (1 + cfg["open_cost"] + cfg["slip"]) / (p * lot)) * lot) if p > 0 else 0
+            shares = A.affordable(j, slot, p * (1 + cfg["slip"]), cfg["open_cost"], cfg["min_cost"])
             if shares == 0:
                 note = "资金不足一手，用替补"
         return dict(操作=action, 代码=j[2:] + "." + j[:2], 名称=names["code_name"].get(j, ""), 行业=names["industry"].get(j, ""),
@@ -166,7 +170,7 @@ def signal_concentrated(a, cfg):
 
     orders = [row("卖出", j, hold[j], why) for j, why in sell] + [row("继续持有", j, hold[j]) for j, _ in keep_list] + \
              [row("买入", j) for j in buy] + [row("替补", j) for j in backup]
-    out = pd.DataFrame(orders)
+    out = pd.DataFrame(orders, columns=["操作", "代码", "名称", "行业", "排名", "股数", "参考价", "参考金额", "备注"])
     os.makedirs("strategies2/signals", exist_ok=True)
     fn = f"strategies2/signals/{a.strategy}_{T.date()}.csv"
     out.to_csv(fn, index=False, encoding="utf-8-sig")
@@ -210,9 +214,9 @@ def cmd_signal(a):
     if cfg["kind"] == "dropout":
         if a.cash is None:
             a.cash = cfg["account"] if not a.holdings else 0.0
-        signal_dropout(a, cfg)
+        return signal_dropout(a, cfg)
     else:
-        signal_concentrated(a, cfg)
+        return signal_concentrated(a, cfg)
 
 
 def main():
@@ -232,6 +236,8 @@ def main():
     s.add_argument("--cash", type=float, default=None, help="可用现金（空仓首次建仓时默认等于配置中的初始资金）")
     s.add_argument("--etf_value", type=float, default=0.0, help="C_top50：当前持有的中证1000ETF 市值（R3 用）")
     s.add_argument("--date", help="信号日（默认最新交易日）")
+    s.add_argument("--r3_state", help="C_top50 连续参考账户 state.json")
+    s.add_argument("--r3_start", default="2023-01-01")
     s.add_argument("--lookback", type=int, default=None, help="模拟盘回看天数（自然日，默认 365；K_top3 设 0 可跳过、更快）")
     a = ap.parse_args()
     cmd_train(a) if a.cmd == "train" else cmd_signal(a)

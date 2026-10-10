@@ -59,6 +59,7 @@ def plot(curves, bench, path, title):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--account", type=float, default=1_000_000)
     ap.add_argument("--strategies", help="逗号分隔，如 K_top3")
     a = ap.parse_args()
     names = a.strategies.split(",") if a.strategies else list(STRATEGIES)
@@ -73,8 +74,9 @@ def main():
             pred = rank_blend([pd.read_parquet(f"output/preds/{p}.parquet") for p in RESEARCH_PREDS[name][k]])
             if cfg["kind"] == "dropout":
                 bt = Backtester(s, e)
-                r = run_dropout(bt, pred, cfg)
-                m, ms = bt.metrics(r), bt.metrics(run_dropout(bt, pred, cfg, slip=0.001))
+                r = run_dropout(bt, pred, cfg, account=a.account)
+                bt.trades.to_csv(f"{OUT}/trades_{name}_{ft}.csv", index=False, encoding="utf-8-sig")
+                m, ms = bt.metrics(r), bt.metrics(run_dropout(bt, pred, cfg, slip=0.001, account=a.account))
                 ret, ex = r["return"], r["excess"]
                 row = dict(区间=per, 策略=name, 年化=m["策略年化"], 最大回撤=m["策略回撤"], 超额年化=m["超额年化"],
                            信息比率=m["信息比率"], 超额回撤=m["超额回撤"], 千1滑点后超额=ms["超额年化"], 日均换手=m["日均换手"],
@@ -84,7 +86,7 @@ def main():
                 panel = load_panel(s, e)
                 tm = vote_timing(b_all, cfg["timing_mas"], cfg["timing_need"])
                 kw = dict(k=cfg["k"], M=cfg["keep_rank"], exec_at=cfg["exec_at"], timing=tm,
-                          buy_cost=cfg["open_cost"], sell_cost=cfg["close_cost"])
+                          buy_cost=cfg["open_cost"], sell_cost=cfg["close_cost"], account=a.account, min_cost=cfg["min_cost"])
                 res = simulate(panel, pred, slip=cfg["slip"], **kw)
                 d = stats(res, bench)
                 d3 = stats(simulate(panel, pred, slip=0.003, **kw), bench)
@@ -93,6 +95,7 @@ def main():
                 row = dict(区间=per, 策略=name, 年化=d["年化"], 最大回撤=d["最大回撤"], 夏普=d["夏普"],
                            超额年化=ex.mean() * 244, 滑点千3时年化=d3["年化"], 日均换手=d["日换手"],
                            持股天数占比=d["持仓天数占比"], 年换股次数=res["turnover"].sum() * cfg["k"] / (len(res) / 244))
+                res.attrs["trades"].to_csv(f"{OUT}/trades_{name}_{ft}.csv", index=False, encoding="utf-8-sig")
                 res.to_csv(f"{OUT}/daily_{name}_{ft}.csv", index=False, encoding="utf-8-sig", float_format="%.6f")
                 del panel
             row["基准年化"] = (1 + bench.reindex(ret.index).fillna(0)).prod() ** (244 / len(ret)) - 1

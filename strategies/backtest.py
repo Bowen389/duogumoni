@@ -28,28 +28,15 @@ from strategies.live import industry_neutral, rank_blend  # noqa: E402
 N_YEAR = 238
 
 
-def r3(bt, res, cfg):
-    cum = (1 + res["excess"]).cumprod()
-    dd = (cum / cum.cummax() - 1).shift(1).fillna(0)
-    st, e = 1.0, []
-    for v in dd.values:
-        if st == 1.0 and v < cfg["r3_in"]:
-            st = cfg["r3_exposure"]
-        elif st < 1.0 and v > cfg["r3_out"]:
-            st = 1.0
-        e.append(st)
-    return bt.overlay(res, pd.Series(e, index=res.index))
-
-
 def run(bt, pred, cfg, slip=0.0, account=None):
-    r = bt.run(pred, mode="dropout", topk=cfg["topk"], n_drop=cfg["n_drop"], every=cfg["every"],
-               open_cost=cfg["open_cost"], close_cost=cfg["close_cost"], min_cost=cfg["min_cost"],
-               risk_degree=cfg["risk_degree"], account=account or cfg["account"], slip=slip)
-    return r3(bt, r, cfg)
+    return bt.run(pred, mode="dropout", topk=cfg["topk"], n_drop=cfg["n_drop"], every=cfg["every"],
+                  open_cost=cfg["open_cost"], close_cost=cfg["close_cost"], min_cost=cfg["min_cost"],
+                  risk_degree=cfg["risk_degree"], account=account or cfg["account"], slip=slip, r3_cfg=cfg)
 
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--account", type=float, help="账户金额，例如100000或1000000；两段均使用同一资金")
     ap.add_argument("--pred", help="自定义预测（output/preds/ 下的文件名，不带扩展名）")
     ap.add_argument("--start", default="2023-01-01")
     ap.add_argument("--end", default="2026-09-18")
@@ -83,8 +70,10 @@ def main():
             if a.strategies and name not in a.strategies.split(","):
                 continue
             pred = pred_of(cfg)
-            r = run(bt, pred, cfg)
-            rs = run(bt, pred, cfg, slip=0.001)
+            r = run(bt, pred, cfg, account=a.account)
+            bt.trades.to_csv(f"{out}/trades_{name}_{ft}.csv", index=False, encoding="utf-8-sig")
+            rs = run(bt, pred, cfg, slip=0.001, account=a.account)
+            bt.trades.to_csv(f"{out}/trades_{name}_{ft}_slip001.csv", index=False, encoding="utf-8-sig")
             m, ms = bt.metrics(r), bt.metrics(rs)
             ex = r["excess"]
             rows.append({"区间": per, "策略": name, "超额年化": m["超额年化"], "信息比率": m["信息比率"],

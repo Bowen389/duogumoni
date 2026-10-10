@@ -33,7 +33,10 @@ echo "Qlib 数据最新交易日：$(tail -1 "$RA_PROVIDER/calendars/day.txt")"
 # 3) 行业分类 + 面板 + 散户因子
 mkdir -p "$RA_EXTRA"
 if [ $REFRESH = 1 ] || [ ! -f "$RA_EXTRA/industry.parquet" ]; then python data_fetch/fetch_industry.py; fi
-if [ $REFRESH = 1 ] || [ ! -d "$RA_DATA/panel" ]; then python -m engine.panel; fi
+if [ $REFRESH = 1 ] || [ ! -d "$RA_DATA/panel" ]; then
+  python data_fetch/fetch_status.py || echo "⚠ 状态缺失的股票禁止新买入；历史回测需另行完整回填"
+  python -m engine.panel
+fi
 if [ $REFRESH = 1 ] || [ ! -d "$RA_DATA/feat_retail" ]; then python -m engine.features --set retail; fi
 if [ $REFRESH = 1 ] || [ ! -d "$RA_DATA/feat_behavior" ]; then python -m engine.features --set behavior; fi   # AE_top20 需要
 if [ $A158 = 1 ]; then python -m engine.features --set alpha158 --chunk 50; fi

@@ -29,7 +29,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 from engine.common import DATA, EXTRA, KEY, read_parts  # noqa: E402
-from strategies.config import MODELS, STRATEGIES  # noqa: E402
+from strategies.config import MODELS, STRATEGIES
+from engine.execution import dropout_orders, affordable, signal_score  # noqa: E402
 
 
 def model_path(name):
@@ -125,58 +126,34 @@ def predict(start, end, names=("retail",)):
     return rank_blend(preds), metas
 
 
-def r3_state(excess, cfg):
-    """按 T 日及以前的模拟盘超额，给出 T+1 的股票仓位比例（与回测中的 R3 完全一致）"""
-    cum = (1 + excess).cumprod()
-    dd = cum / cum.cummax() - 1
-    st, hist = 1.0, []
-    for v in dd.values:            # v 是当日收盘后的回撤 → 决定下一日状态
-        hist.append(st)
-        if st == 1.0 and v < cfg["r3_in"]:
-            st = cfg["r3_exposure"]
-        elif st < 1.0 and v > cfg["r3_out"]:
-            st = 1.0
-    return st, hist[-1], dd.iloc[-1]
-
-
-def dropout_orders(score, hold, topk, n_drop):
-    """与 engine/backtest.py 的 dropout 规则相同：卖出排名最差的 n_drop 只，补入未持有的高分股"""
-    s = score.dropna().sort_values(ascending=False)
-    sc = lambda j: s.get(j, -np.inf)  # noqa: E731
-    # 没有打分的持仓（不在中证1000 / 已调出 / 手动买入的其他股票）直接全部卖出，不占 n_drop 名额
-    extra = [j for j in hold if j not in s.index]
-    hold = [j for j in hold if j in s.index]
-    last = sorted(hold, key=sc, reverse=True)
-    n_add = n_drop + topk - len(last)
-    cand = [j for j in s.index if j not in set(last)]
-    today = cand[:max(n_add, 0)]
-    comb = sorted(last + today, key=sc, reverse=True)
-    worst = set(comb[-n_drop:]) if n_drop > 0 else set()
-    sell = [j for j in last if j in worst]
-    buy = today[:len(sell) + topk - len(last)]
-    sell = extra + sell
-    backup = [j for j in cand if j not in set(buy)][:max(5, 2 * len(buy))]
-    return sell, buy, backup, s
-
-
 def cmd_signal(a):
     from engine.backtest import Backtester
     cfg = STRATEGIES[a.strategy]
     T = pd.Timestamp(a.date) if a.date else last_trading_day()
-    start = T - pd.Timedelta(days=a.r3_lookback)
+    override = getattr(a, "r3_override", None)
+    state_file = getattr(a, "r3_state", None)
+    if override is None and state_file:
+        saved = json.load(open(state_file, encoding="utf-8"))
+        override = saved.get("r3", saved)
+        if override.get("last_date") != str(T.date()):
+            raise ValueError("R3 state is stale; update the continuous reference account first")
+    start = pd.Timestamp(getattr(a, "r3_start", "2023-01-01")) if override is None else T - pd.Timedelta(days=10)
     pred, metas = predict(start - pd.Timedelta(days=40), T, cfg["models"])
-    if pred["datetime"].max() < T:
-        sys.exit(f"{T.date()} 没有因子数据，请先运行 bash setup_env.sh --refresh")
-
-    # ---- R3：用同一模型的模拟盘（从 T-lookback 开始）计算策略超额回撤
-    bt = Backtester(start, T)
-    paper = bt.run(pred, mode="dropout", topk=cfg["topk"], n_drop=cfg["n_drop"], every=cfg["every"],
-                   open_cost=cfg["open_cost"], close_cost=cfg["close_cost"], account=cfg["account"],
-                   min_cost=cfg["min_cost"], risk_degree=cfg["risk_degree"])
-    expo_next, expo_today, dd = r3_state(paper["excess"], cfg)
+    if pred.empty or pred["datetime"].max() < T:
+        sys.exit(f"{T.date()} 没有因子数据，请先更新行情与因子")
+    paper = None
+    if override is None:
+        bt = Backtester(start, T)
+        paper = bt.run(pred, mode="dropout", topk=cfg["topk"], n_drop=cfg["n_drop"], every=cfg["every"],
+                       open_cost=cfg["open_cost"], close_cost=cfg["close_cost"], account=cfg["account"],
+                       min_cost=cfg["min_cost"], risk_degree=cfg["risk_degree"], r3_cfg=cfg)
+        override = bt.last_r3
+    expo_next = float(override["exposure"])
+    expo_today = float(override.get("previous_exposure", expo_next))
+    dd = float(override.get("dd", 0))
 
     # ---- 当前持仓与价格
-    px = read_parts(os.path.join(DATA, "panel"), columns=["datetime", "instrument", "raw_close", "up_lim", "dn_lim", "susp"],
+    px = read_parts(os.path.join(DATA, "panel"), columns=["datetime", "instrument", "raw_close", "up_lim", "dn_lim", "susp", "in_pool", "buy_ok", "is_st", "is_delisted"],
                     start=T, end=T).set_index("instrument")
     names = pd.read_parquet(os.path.join(EXTRA, "industry.parquet")).set_index("instrument")
     if a.holdings:
@@ -203,8 +180,8 @@ def cmd_signal(a):
     stock_value = float(val.sum())
     total = stock_value + a.cash + a.etf_value
 
-    score = pred[pred["datetime"] == T].set_index("instrument")["score"]
-    sell, buy, backup, s = dropout_orders(score, list(hold.index), cfg["topk"], cfg["n_drop"])
+    score = signal_score(pred[pred["datetime"] == T].set_index("instrument")["score"], px)
+    sell, buy, backup, s = dropout_orders(score, list(hold.index), cfg["topk"], cfg["n_drop"], px["buy_ok"].fillna(False))
     if cfg["every"] > 1 and a.day_index % cfg["every"] != 0:
         sell, buy = [], []
 
@@ -219,7 +196,7 @@ def cmd_signal(a):
         p = float(px["raw_close"].get(j, np.nan))
         if shares is None:
             lot = lot_of(j)
-            shares = int(np.floor(per / (1 + cfg["open_cost"]) / (p * lot)) * lot) if p > 0 else 0
+            shares = affordable(j, per, p, cfg["open_cost"], cfg["min_cost"])
         return dict(操作=action, 代码=j[2:] + "." + j[:2], 名称=names["code_name"].get(j, ""),
                     行业=names["industry"].get(j, ""), 排名=int(rank.get(j, -1)), 股数=int(shares),
                     参考价=round(p, 2), 参考金额=round(shares * p if p > 0 else 0, 0),
@@ -229,7 +206,7 @@ def cmd_signal(a):
 
     orders = [row("卖出", j, hold[j]) for j in sell] + [row("买入", j) for j in buy] + \
              [row("替补", j) for j in backup]
-    out = pd.DataFrame(orders)
+    out = pd.DataFrame(orders, columns=["操作", "代码", "名称", "行业", "排名", "股数", "参考价", "参考金额", "备注"])
     os.makedirs("strategies/signals", exist_ok=True)
     fn = f"strategies/signals/{a.strategy}_{T.date()}.csv"
     out.to_csv(fn, index=False, encoding="utf-8-sig")
@@ -248,17 +225,21 @@ def cmd_signal(a):
     if expo_next < 1:
         tag = "进入" if expo_today >= 1 else "维持"
         print(f"  ▶ {tag} R3 半仓：股票约 {total * expo_next:,.0f} 元，中证1000ETF（{cfg['hedge_etf']}）约 {etf_target:,.0f} 元"
-              f"（当前 {a.etf_value:,.0f}）。" + ("ETF 不足时，把每只持仓卖出约一半（按手取整）去买 ETF；" if a.etf_value < 0.9 * etf_target else "")
+              f"（当前 {a.etf_value:,.0f}）。" + ("ETF 不足时，先用现金，再卖出所需股票去买 ETF；" if a.etf_value < 0.9 * etf_target else "")
               + "下方买入清单已按半仓计算")
     elif a.etf_value > 0:
         print(f"  ▶ 解除 R3：卖出全部中证1000ETF（{a.etf_value:,.0f} 元），资金并入股票账户，之后的信号会逐步补足持仓")
-    print(f"模拟盘近 {a.r3_lookback} 天：超额 {paper['excess'].sum():+.1%}，日均换手 {paper['turnover'].mean():.1%}\n")
+    print(f"状态可确认且可新买入：{int(px['buy_ok'].fillna(False).sum())} 只；ST/退市/未知状态不列为买入候选。")
+    print("R3 使用连续未控仓参考账户的相对净值；清单股数为估计，成交时按实际资金/价格重算。\n")
     main = out[out["操作"] != "替补"]
     print(main.to_string(index=False) if len(main) else "今日无需交易")
     if len(buy):
         print("\n替补（买入目标涨停/停牌买不进时按顺序替换）：",
               "、".join(f"{r.代码} {r.名称}" for r in out[out["操作"] == "替补"].head(10).itertuples()))
     print(f"\n已保存 {fn}")
+    out.attrs["score"] = score
+    out.attrs["eligible"] = px["buy_ok"].fillna(False)
+    return out
 
 
 def main():
@@ -278,6 +259,8 @@ def main():
     s.add_argument("--cash", type=float, default=None, help="可用现金（默认等于策略配置中的初始资金，用于首次建仓）")
     s.add_argument("--etf_value", type=float, default=0.0, help="当前持有的中证1000ETF市值（R3 用）")
     s.add_argument("--date", help="信号日（默认最新交易日）")
+    s.add_argument("--r3_state", help="连续参考账户的 state.json；必须更新到信号日")
+    s.add_argument("--r3_start", default="2023-01-01", help="无持久状态时，从固定起点回放，不能滚动重置")
     s.add_argument("--r3_lookback", type=int, default=365, help="R3 模拟盘回看天数（自然日）")
     s.add_argument("--day_index", type=int, default=0, help="every>1 时的交易日计数")
     a = ap.parse_args()

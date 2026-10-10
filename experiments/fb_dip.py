@@ -10,7 +10,8 @@
   开盘买入，次日收盘卖出；每笔 50% 资金，最多同时 2 只
 
 事件：T-1 日涨停且 T-2 日未涨停（首板）；T 日未停牌、开盘未一字涨停、在池内
-买入：T 日开盘价（集合竞价后即可知道低开幅度，下单无未来信息）
+买入：旧研究假设 T 日开盘价成交；9:25 已知开盘价后无法保证按该价买入，不能作为可执行回测。
+实际执行回放改用 strategies2/fb_backtest.py 和独立09:35价格。
 卖出（顺延规则：卖出日收盘跌停/停牌 → 卖不出，顺延到下一个能卖的收盘；开盘卖遇一字跌停 → 改当日收盘，仍不行继续顺延；最多顺延 8 天）
   C1  T+1 收盘卖
   O1  T+1 开盘卖
@@ -47,6 +48,8 @@ def fixed_cost(dt):
 
 # ------------------------------------------------------------------ build
 def build():
+    if os.environ.get("RA_ALLOW_LEGACY_OPEN_RESEARCH") != "1":
+        raise ValueError("This is archived auction-price research. Use strategies2/fb_backtest.py for executable replay; to inspect legacy events explicitly set RA_ALLOW_LEGACY_OPEN_RESEARCH=1.")
     pdir = os.path.join(DATA, "panel")
     cols = KEY + ["open", "high", "low", "close", "amount", "lim", "up_lim", "dn_lim", "susp", "in_pool", "up_open", "dn_open"]
     M = pd.read_parquet(os.path.join(DATA, "senti_market.parquet")).set_index("datetime")

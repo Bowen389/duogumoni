@@ -24,7 +24,7 @@ os.chdir(ROOT)
 from engine.common import DATA, KEY  # noqa: E402
 
 PCOLS = ["datetime", "instrument", "open", "high", "low", "close", "raw_close", "change", "factor", "amount", "lim",
-         "up_lim", "dn_lim", "susp", "in_pool", "ret", "ret_on", "ret_id", "up_open", "dn_open", "nbo"]
+         "up_lim", "dn_lim", "susp", "in_pool", "buy_ok", "status_known", "is_st", "is_delisted", "ret", "ret_on", "ret_id", "up_open", "dn_open", "nbo"]
 STOCK_F = ["LB", "UP0", "TOUCH0", "ZB0", "NUP10", "R1", "R3", "R5", "DH20", "AMP", "CPOS", "GAP", "VR5", "VR20"]
 MKT_F = ["M_UP", "M_DN", "M_ZB", "M_LBMAX", "M_LB2", "M_RELAY", "M_RELAY_ON", "M_BREADTH", "M_MED", "M_BIGDN", "M_AMT"]
 WF = {"滚动近一年": dict(train=("2015-01-01", "2023-08-31"), valid=("2023-09-01", "2025-09-12"),
@@ -43,7 +43,7 @@ def build():
         p = pd.read_parquet(os.path.join(pdir, fn), columns=PCOLS)
         p = p.sort_values(["instrument", "datetime"]).reset_index(drop=True)
         g = p.groupby("instrument", sort=False)
-        act = ~p["susp"]
+        act = ~p["susp"] & p["status_known"] & ~p["is_st"] & ~p["is_delisted"]
         prev_raw = p["raw_close"] / (1 + p["change"])
         up_p = np.round(prev_raw * (1 + p["lim"]) + 1e-6, 2)
         touch = (p["high"] / p["factor"] >= up_p - 0.0051) & act
