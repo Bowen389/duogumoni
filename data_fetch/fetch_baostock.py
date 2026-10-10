@@ -33,8 +33,8 @@ def worker(codes, out, start, end, wid):
                     raise RuntimeError(f"baostock error {rs.error_code} {rs.error_msg}")
                 df = pd.DataFrame(rows, columns=["date", "turn", "isST", "tradestatus"])
                 df["turn"] = pd.to_numeric(df["turn"], errors="coerce").astype("float32")
-                df["isST"] = pd.to_numeric(df["isST"], errors="coerce").fillna(0).astype("int8")
-                df["tradestatus"] = pd.to_numeric(df["tradestatus"], errors="coerce").fillna(0).astype("int8")
+                df["isST"] = pd.to_numeric(df["isST"], errors="coerce").astype("float32")
+                df["tradestatus"] = pd.to_numeric(df["tradestatus"], errors="coerce").astype("float32")
                 df["date"] = pd.to_datetime(df["date"])
                 df.to_parquet(fp, index=False)
                 break

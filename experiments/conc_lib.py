@@ -13,7 +13,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine.common import DATA, KEY, read_parts  # noqa
 
-PANEL_COLS = KEY + ["in_pool", "susp", "ret", "ret_on", "ret_id", "up_lim", "dn_lim", "up_open", "dn_open", "raw_close"]
+PANEL_COLS = KEY + ["in_pool", "susp", "ret", "ret_on", "ret_id", "up_lim", "dn_lim", "up_open", "dn_open", "raw_close", "raw_open", "factor", "buy_ok", "is_st", "is_delisted", "status_known"]
 
 
 def load_panel(start, end):
@@ -27,83 +27,50 @@ def bench_series(start, end):
 
 
 def simulate(panel, score, k=3, M=30, exec_at="close", timing=None, buy_cost=0.0005, sell_cost=0.0010, slip=0.001,
-             max_hold=0, min_score=None):
-    """score: DataFrame(datetime, instrument, score) —— 越大越好，datetime = 信号日
-    timing: pd.Series(bool, index=信号日)；False → 下一交易日清仓空仓
-    max_hold>0: 持有满 max_hold 天强制换
-    min_score: 分数低于此值的股票不买（可让策略在没有好机会时部分空仓）
-    返回 DataFrame(datetime, ret, n_hold, turnover)"""
-    days = np.array(sorted(panel["datetime"].unique()))
-    insts = np.array(sorted(panel["instrument"].unique()))
-    di = pd.Series(np.arange(len(days)), index=days)
-    ii = pd.Series(np.arange(len(insts)), index=insts)
-    r_ = di.reindex(panel["datetime"].values).values
-    c_ = ii.reindex(panel["instrument"].values).values
-    mats = {}
-    for c in ["ret", "ret_on", "ret_id"]:
-        m = np.zeros((len(days), len(insts)), dtype="float32")
-        m[r_, c_] = panel[c].fillna(0).values
-        mats[c] = m
-    for c, dflt in [("up_lim", False), ("dn_lim", False), ("up_open", False), ("dn_open", False), ("susp", True),
-                    ("in_pool", False)]:
-        m = np.full((len(days), len(insts)), dflt, dtype=bool)
-        m[r_, c_] = panel[c].fillna(dflt).values.astype(bool)
-        mats[c] = m
-    have = np.zeros((len(days), len(insts)), dtype=bool)
-    have[r_, c_] = True
-    # 排名（信号日）
-    sc = score[score["datetime"].isin(days) & score["instrument"].isin(insts)].copy()
-    sc["rk"] = sc.groupby("datetime")["score"].rank(ascending=False, method="first")
-    top = sc[sc["rk"] <= max(M, k + 20)].sort_values(["datetime", "rk"])
-    rank_by_day, score_by_day, order_by_day = {}, {}, {}
-    for d, gdf in top.groupby("datetime"):
-        idx = ii.reindex(gdf["instrument"].values).values
-        rank_by_day[d] = dict(zip(idx, gdf["rk"].values))
-        score_by_day[d] = dict(zip(idx, gdf["score"].values))
-        order_by_day[d] = list(idx)
-    hold = {}   # 股票序号 -> 持有天数
-    out = []
+             max_hold=0, min_score=None, account=1_000_000, min_cost=5.0):
+    """Cash/share replay through the same executor as K_top3 paper trading."""
+    from engine.execution import Ledger, concentrated_orders, signal_score, execute_conc
+    from engine.market import PanelMarket
+    active = panel[panel["in_pool"]]
+    if not active["status_known"].fillna(False).all():
+        raise ValueError("Historical ST status missing; backfill fetch_status.py and rebuild panel")
+    mk = PanelMarket(panel)
+    days = sorted(pd.to_datetime(panel["datetime"].unique()))
+    scores = {pd.Timestamp(d): g.set_index("instrument")["score"] for d, g in score.groupby("datetime")}
+    acc = Ledger(account)
+    cfg = dict(k=k, exec_at=exec_at, open_cost=buy_cost, close_cost=sell_cost, min_cost=min_cost, slip=slip)
+    ages, out = {}, []
     for i in range(1, len(days)):
-        t, s = days[i], days[i - 1]          # 在 t 日成交，用 s 日信号
-        rk = rank_by_day.get(s, {})
-        on = True if timing is None else bool(timing.get(s, True))
-        sells, keeps = [], []
-        for x, h in hold.items():
-            want_sell = (not on) or rk.get(x, 1e9) > M or (max_hold and h >= max_hold) or not mats["in_pool"][i, x]
-            blocked = mats["susp"][i, x] or (mats["dn_lim"][i, x] if exec_at == "close" else mats["dn_open"][i, x])
-            (sells if want_sell and not blocked else keeps).append(x)
-        n_free = k - len(keeps)
-        buys = []
-        if on and n_free > 0:
-            for x in order_by_day.get(s, []):
-                if len(buys) >= n_free:
-                    break
-                if x in hold:
-                    continue
-                if min_score is not None and score_by_day[s][x] < min_score:
-                    break
-                blocked = mats["susp"][i, x] or (mats["up_lim"][i, x] if exec_at == "close" else mats["up_open"][i, x])
-                if not blocked and have[i, x]:
-                    buys.append(x)
-        w = 1.0 / k
-        r = 0.0
-        if exec_at == "close":
-            for x in keeps + sells:
-                r += w * mats["ret"][i, x]
-        else:
-            for x in keeps:
-                r += w * mats["ret"][i, x]
-            for x in sells:
-                r += w * mats["ret_on"][i, x]
-            for x in buys:
-                r += w * mats["ret_id"][i, x]
-        cost = w * (len(sells) * (sell_cost + slip) + len(buys) * (buy_cost + slip))
-        r -= cost
-        hold = {x: hold[x] + 1 for x in keeps}
-        for x in buys:
-            hold[x] = 1
-        out.append((t, r, len(hold), w * (len(sells) + len(buys)) / 2, ",".join(insts[list(hold)])))
-    return pd.DataFrame(out, columns=["datetime", "ret", "n_hold", "turnover", "hold"])
+        d, signal_day = days[i], days[i - 1]
+        prev = acc.total()
+        acc.mark(mk, d, at=exec_at)
+        day = mk.day(signal_day)
+        sc = signal_score(scores.get(signal_day, pd.Series(dtype=float)), day)
+        on = True if timing is None else bool(timing.get(signal_day, False))
+        pend = concentrated_orders(sc, list(acc.s["positions"]), k, M, on, day["buy_ok"].fillna(False))
+        if max_hold:
+            pend["sell"] = list(dict.fromkeys(pend["sell"] + [j for j in ages if ages[j] >= max_hold]))
+            if on:
+                n = max(k - len([j for j in acc.s["positions"] if j not in pend["sell"]]), 0)
+                cand = [j for j in sc.sort_values(ascending=False, kind="stable").index
+                        if j not in acc.s["positions"] and day["buy_ok"].get(j, False)]
+                pend["buy"] = [dict(inst=j) for j in cand[:n]]
+                pend["backup"] = [dict(inst=j) for j in cand[n:n + 5]]
+        if min_score is not None:
+            for c in ("buy", "backup"):
+                pend[c] = [x for x in pend[c] if sc.get(x["inst"], -np.inf) >= min_score]
+        n0 = len(acc.trades)
+        execute_conc(acc, mk, d, pend, {}, cfg)
+        acc.mark(mk, d)
+        ages = {j: ages.get(j, 0) + 1 for j in acc.s["positions"]}
+        trades = [t for t in acc.trades[n0:] if t["操作"] in ("买入", "卖出")]
+        traded = sum(t["金额"] for t in trades)
+        out.append(dict(datetime=d, ret=acc.total() / prev - 1, value=acc.total(), cash=acc.s["cash"],
+                        n_hold=len(acc.s["positions"]), turnover=traded / prev / 2,
+                        hold=",".join(acc.s["positions"])))
+    res = pd.DataFrame(out, columns=["datetime", "ret", "value", "cash", "n_hold", "turnover", "hold"])
+    res.attrs["trades"] = pd.DataFrame(acc.trades)
+    return res
 
 
 def stats(res, bench=None):

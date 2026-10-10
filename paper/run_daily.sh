@@ -45,6 +45,10 @@ if ! timeout 300 $PY data_fetch/fetch_industry.py; then
 fi
 echo "::endgroup::"
 
+echo "::group::3a) 历史ST/交易状态（失败时未知状态股票禁止新买入）"
+timeout 1200 $PY data_fetch/fetch_status.py || echo "⚠ 状态更新失败；缺失日期状态不会允许新买入"
+echo "::endgroup::"
+
 echo "::group::3) 面板 + 散户因子 + 长期犯错因子"
 $PY -m engine.panel
 $PY -m engine.features --set retail
@@ -63,6 +67,10 @@ echo "::endgroup::"
 
 echo "::group::5) 市场情绪（FB_dip 用）"
 $PY experiments/senti.py build
+echo "::endgroup::"
+
+echo "::group::5b) FB 首5分钟成交价格（失败时记录未成交）"
+timeout 300 $PY data_fetch/fetch_execution.py || echo "⚠ 分钟价格更新失败；缺价候选不假设成交"
 echo "::endgroup::"
 
 echo "::group::6) 模拟盘：成交 → 盯市 → 生成下一交易日清单"

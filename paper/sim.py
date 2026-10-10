@@ -1,16 +1,16 @@
 """
-模拟盘：每个策略一个独立账户（默认 10 万），每个交易日严格按各策略自带的 live 工具给出的清单操作
+模拟盘：每个策略一个独立账户（默认 10 万），每个交易日按 live 工具选股清单操作，成交时重新检查资金/空位并计算股数
 
   python paper/sim.py run                      # 处理所有未处理的交易日（成交 → 盯市 → 生成下一日清单），可重复运行
   python paper/sim.py run --strategy K_top3    # 只跑一个
   python paper/sim.py summary                  # 只重新生成 paper/README.md 里的总览
 
-每个交易日 d 的处理顺序（与各策略的实盘规则一致）：
+每个交易日 d 的处理顺序（成交为日线/5分钟代理，不保证实盘成交）：
   1) 成交：执行上一信号日生成的清单
        A_top50 / A_top20 / AE_top20 / C_top50  d 日收盘价成交（尾盘集合竞价）；涨停/停牌买不进用替补，跌停/停牌卖不出继续持有
                                                 R3：按清单提示把持仓卖出约一半换成中证1000ETF，解除时卖出全部 ETF
        K_top3                                   d 日开盘价成交（开盘集合竞价），滑点千1；开盘一字涨停/停牌用替补
-       FB_dip                                   d 日开盘价落在买入区间才买（低开深的优先，最多 2 只，每只半仓），
+       FB_dip                                   d 日开盘价用于低开筛选，09:35首5分钟价近似成交（限价/缺价不买），
                                                 买入后的下一个交易日收盘卖出（跌停/停牌顺延）
   2) 盯市：按 d 日收盘价估值（除权除息按复权因子折算成股数，相当于分红再投资）
   3) 出清单：调用各策略自己的 signal 工具，用账户的真实持仓和现金生成 d+1 的操作清单
@@ -18,7 +18,7 @@
 状态保存在 paper/accounts/<策略>/：state.json（现金、持仓、待执行清单）、nav.csv（每日净值）、trades.csv（成交记录）、
 positions.csv（当前持仓）；每日清单保存到 paper/signals/<日期>/<策略>.csv
 说明：
-  - 数据截止日由 Qlib 数据决定。17:00 运行时如果当天数据还没发布，本次不会处理当天，下次运行会自动补上（成交价仍按当天真实价格）
+  - 数据截止日由 Qlib 数据决定。17:00 运行时如果当天数据还没发布，本次不会处理当天，下次运行会自动补上（成交估计仍使用当天对应的报价）
   - 中证1000ETF 没有单独的价格数据，用中证1000 指数日收益近似
 """
 import argparse
@@ -49,12 +49,12 @@ STRATS = {
     "AE_top20": dict(kind="dropout", family="A", desc="两模型集成，持 20 只，每天换 1 只，R3 风控"),
     "C_top50": dict(kind="dropout", family="C", desc="三模型集成（含股东户数），持 50 只，每天换 2 只，R3 风控"),
     "K_top3": dict(kind="conc", family="C", desc="六个 5 日模型集成，最多 3 只，均线择时空仓，开盘成交"),
-    "FB_dip": dict(kind="fb", family="FB", desc="低位首板次日低开 2–7% 开盘买，次日收盘卖，最多 2 只"),
+    "FB_dip": dict(kind="fb", family="FB", desc="低位首板次日低开 2–7% 09:35首5分钟价近似买，次日收盘卖，最多 2 只"),
 }
-ETF_CODE = "512100"
-# 数据源的复权因子每天有约 0.01% 的计算噪声；变化超过 0.3% 才认为是除权除息（更小的分红忽略）
-ADJ_TOL = 0.003
-FB_BUY_COMM, FB_SELL_COMM, FB_STAMP, FB_SLIP = 0.00025, 0.00025, 0.0005, 0.001
+from engine.execution import (Ledger, ETF_CODE, ADJ_TOL, EXECUTION_VERSION, code_of, lot_of, fee,
+                              execute_dropout, execute_conc, execute_fb, dropout_orders, advance_r3)
+from engine.market import Market
+import copy
 
 
 # ============================================================================ 工具
@@ -68,78 +68,10 @@ def inst_of(code):
     return norm_code(c)
 
 
-def code_of(inst):
-    return inst[2:] + "." + inst[:2]
-
-
-def lot_of(inst):
-    return 200 if inst.startswith("SH688") else 100
-
-
-def fee(amount, rate, min_cost=5.0, stamp=0.0):
-    if amount <= 0:
-        return 0.0
-    return max(amount * rate, min_cost) + amount * stamp
-
-
 def trading_days():
     from engine.common import PROVIDER
     cal = pd.read_csv(os.path.join(PROVIDER, "calendars", "day.txt"), header=None)[0]
     return [pd.Timestamp(x) for x in cal]
-
-
-class Market:
-    """某一日的行情（未复权价、复权因子、涨跌停/停牌），带缓存"""
-
-    COLS = ["datetime", "instrument", "raw_close", "raw_open", "factor", "up_lim", "dn_lim", "up_open", "dn_open", "susp"]
-
-    def __init__(self):
-        from engine.common import DATA
-        self.DATA = DATA
-        self.cache = {}
-        b = pd.read_parquet(os.path.join(DATA, "bench.parquet")).set_index("datetime")["bench"]
-        self.bench = b
-
-    def day(self, d):
-        d = pd.Timestamp(d)
-        if d not in self.cache:
-            from engine.common import read_parts
-            p = read_parts(os.path.join(self.DATA, "panel"), columns=self.COLS, start=d, end=d)
-            self.cache[d] = p.set_index("instrument")
-        return self.cache[d]
-
-    def quote(self, d, inst):
-        """返回 dict(close, open, factor, up_lim, dn_lim, up_open, dn_open, susp)；面板外的股票从 Qlib 全市场取"""
-        t = self.day(d)
-        if inst in t.index:
-            r = t.loc[inst]
-            q = {k: r[k] for k in self.COLS[2:]}
-        else:
-            q = self._qlib_quote(d, inst)
-        for k in ("raw_close", "raw_open", "factor"):
-            q[k] = float(q[k]) if q[k] is not None and not pd.isna(q[k]) else float("nan")
-        for k in ("up_lim", "dn_lim", "up_open", "dn_open", "susp"):
-            q[k] = bool(q[k]) if q[k] is not None and not pd.isna(q[k]) else (k == "susp")
-        for k in ("raw_close", "raw_open"):
-            if q[k] > 0:
-                q[k] = round(q[k], 2)       # 复权价反推的未复权价有微小误差，还原到分
-        if not q["raw_close"] > 0:
-            q["susp"] = True
-        return q
-
-    def _qlib_quote(self, d, inst):
-        from engine.common import init_qlib
-        from qlib.data import D
-        init_qlib()
-        try:
-            f = D.features([inst], ["$close/$factor", "$open/$factor", "$factor", "$volume", "$change"], d, d)
-            r = f.iloc[0].values
-            vol = r[3]
-            return dict(raw_close=r[0], raw_open=r[1], factor=r[2], up_lim=False, dn_lim=False, up_open=False,
-                        dn_open=False, susp=not (vol > 0))
-        except Exception:  # noqa: BLE001
-            return dict(raw_close=np.nan, raw_open=np.nan, factor=np.nan, up_lim=False, dn_lim=False, up_open=False,
-                        dn_open=False, susp=True)
 
 
 def names_table():
@@ -148,7 +80,7 @@ def names_table():
 
 
 # ============================================================================ 账户
-class Account:
+class Account(Ledger):
     def __init__(self, name):
         self.name = name
         self.dir = os.path.join(ACC_DIR, name)
@@ -168,62 +100,16 @@ class Account:
         self.s = dict(strategy=self.name, init_cash=INIT_CASH, start_date=str(start.date()), last_date=None,
                       cash=INIT_CASH, etf_value=0.0, positions={}, pending=None)
 
-    # ----- 估值
-    def mark(self, mk, d):
-        """复权折算股数 + 按 d 日收盘估值"""
-        val = 0.0
-        for j, p in self.s["positions"].items():
-            q = mk.quote(d, j)
-            f0 = p.get("factor") or 0
-            if q["factor"] > 0 and f0 > 0 and abs(q["factor"] / f0 - 1) > ADJ_TOL:     # 除权除息：送转/分红折算成股数
-                p["shares"] = round(p["shares"] * q["factor"] / f0, 2)
-                p["factor"] = q["factor"]
-            elif q["factor"] > 0 and f0 <= 0:
-                p["factor"] = q["factor"]
-            if q["raw_close"] > 0:
-                p["last_px"] = q["raw_close"]
-            val += p["shares"] * p.get("last_px", 0.0)
-        return val
-
-    def total(self):
-        return self.s["cash"] + self.s["etf_value"] + sum(p["shares"] * p.get("last_px", 0.0)
-                                                          for p in self.s["positions"].values())
-
-    def stock_value(self):
-        return sum(p["shares"] * p.get("last_px", 0.0) for p in self.s["positions"].values())
-
-    # ----- 成交
-    def trade(self, d, action, inst, shares, px, f, note="", name=""):
-        amt = shares * px
-        if action == "买入":
-            self.s["cash"] -= amt + f
-            p = self.s["positions"].get(inst)
-            if p:
-                p["cost"] += amt + f
-                p["shares"] += shares
-            else:
-                self.s["positions"][inst] = dict(shares=float(shares), cost=amt + f, buy_date=str(d.date()),
-                                                 last_px=px, factor=None)
-        else:
-            self.s["cash"] += amt - f
-            p = self.s["positions"][inst]
-            if shares >= p["shares"] - 1e-6:
-                del self.s["positions"][inst]
-            else:
-                p["cost"] *= 1 - shares / p["shares"]
-                p["shares"] -= shares
-        self.trades.append(dict(日期=str(d.date()), 操作=action, 代码=code_of(inst) if inst != "ETF" else ETF_CODE,
-                                名称=name, 股数=int(shares) if float(shares).is_integer() else round(shares, 2), 成交价=round(px, 3), 金额=round(amt, 2),
-                                费用=round(f, 2), 备注=note))
-
     # ----- 保存
     def save(self, names):
         os.makedirs(self.dir, exist_ok=True)
-        json.dump(self.s, open(self.fn, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
         if self.trades:
             fn = os.path.join(self.dir, "trades.csv")
             df = pd.DataFrame(self.trades)
-            df.to_csv(fn, mode="a", header=not os.path.exists(fn), index=False, encoding="utf-8-sig")
+            if os.path.exists(fn):
+                old = pd.read_csv(fn, encoding="utf-8-sig")
+                df = pd.concat([old[~old["日期"].isin(df["日期"])], df], ignore_index=True)
+            df.to_csv(fn, index=False, encoding="utf-8-sig")
             self.trades = []
         if self.navs:
             fn = os.path.join(self.dir, "nav.csv")
@@ -249,183 +135,10 @@ class Account:
             os.makedirs(dd, exist_ok=True)
             pd.DataFrame(rows, columns=["代码", "名称", "股数", "现价", "市值", "成本", "浮动盈亏", "买入日期"]).to_csv(
                 os.path.join(dd, f"{self.name}_positions.csv"), index=False, encoding="utf-8-sig")
-
-
-# ============================================================================ 成交逻辑
-def execute_dropout(acc, mk, d, pend, names, cfg):
-    """A/C 系列：d 日收盘价成交"""
-    oc, cc, mc = cfg["open_cost"], cfg["close_cost"], cfg["min_cost"]
-    pos = acc.s["positions"]
-    # 1) 卖出清单
-    for j in pend["sell"]:
-        if j not in pos:
-            continue
-        q = mk.quote(d, j)
-        if q["susp"] or q["dn_lim"]:
-            acc.trades.append(dict(日期=str(d.date()), 操作="卖出失败", 代码=code_of(j), 名称=names.get(j, ""), 股数=round(pos[j]["shares"], 2),
-                                   成交价="", 金额="", 费用="", 备注="跌停/停牌，继续持有"))
-            continue
-        sh = pos[j]["shares"]
-        acc.trade(d, "卖出", j, sh, q["raw_close"], fee(sh * q["raw_close"], cc, mc), "清单卖出", names.get(j, ""))
-    # 2) R3
-    expo_next = pend.get("expo_next", 1.0)
-    total = acc.total()
-    if expo_next < 1:
-        target = total * (1 - expo_next)
-        if acc.s["etf_value"] < 0.9 * target:
-            need = target - acc.s["etf_value"]
-            sv = acc.stock_value()
-            frac = min(1.0, need / sv) if sv > 0 else 0
-            # 每只卖出约一半（按手取整）；只有 1 手的小仓位取整后为 0，再逐手补卖，直到凑够 ETF 目标
-            plan = {}
-            for j in pos:
-                q = mk.quote(d, j)
-                if q["susp"] or q["dn_lim"]:
-                    continue
-                plan[j] = [math.floor(pos[j]["shares"] * frac / lot_of(j)) * lot_of(j), q["raw_close"]]
-            val = lambda: sum(sh * px for sh, px in plan.values())  # noqa: E731
-            while val() < need * 0.95:
-                left = [(pos[j]["shares"] - sh) * px for j, (sh, px) in plan.items()]
-                if not plan or max(left) < 1:
-                    break
-                j = list(plan)[int(np.argmax(left))]
-                plan[j][0] = min(plan[j][0] + lot_of(j), pos[j]["shares"])
-            got = 0.0
-            for j, (sh, px) in plan.items():
-                if sh <= 0:
-                    continue
-                if pos[j]["shares"] - sh < lot_of(j):      # 剩下不足 1 手（除权后的零股）就整笔卖掉
-                    sh = pos[j]["shares"]
-                amt = sh * px
-                f = fee(amt, cc, mc)
-                acc.trade(d, "卖出", j, sh, px, f, "R3 半仓：卖出约一半换 ETF", names.get(j, ""))
-                got += amt - f
-            buy_amt = min(need, got, acc.s["cash"])
-            if buy_amt > 100:
-                f = fee(buy_amt, oc, mc)
-                acc.s["cash"] -= buy_amt
-                acc.s["etf_value"] += buy_amt - f
-                acc.trades.append(dict(日期=str(d.date()), 操作="买入", 代码=ETF_CODE, 名称="中证1000ETF（指数近似）", 股数="",
-                                       成交价="", 金额=round(buy_amt - f, 2), 费用=round(f, 2), 备注="R3 半仓"))
-    elif acc.s["etf_value"] > 0:
-        v = acc.s["etf_value"]
-        f = fee(v, oc, mc)
-        acc.s["cash"] += v - f
-        acc.s["etf_value"] = 0.0
-        acc.trades.append(dict(日期=str(d.date()), 操作="卖出", 代码=ETF_CODE, 名称="中证1000ETF（指数近似）", 股数="",
-                               成交价="", 金额=round(v, 2), 费用=round(f, 2), 备注="解除 R3，卖出全部 ETF"))
-    # 3) 买入（买不进/资金不足一手 → 按顺序用替补）
-    backups = [b for b in pend["backup"]]
-    done = set(pos)
-
-    def try_buy(j, sh, note):
-        if j in done or sh <= 0:
-            return False
-        q = mk.quote(d, j)
-        if q["susp"] or q["up_lim"] or not q["raw_close"] > 0:
-            return False
-        px, lot = q["raw_close"], lot_of(j)
-        while sh > 0 and sh * px + fee(sh * px, oc, mc) > acc.s["cash"]:
-            sh -= lot
-        if sh <= 0:
-            return False
-        acc.trade(d, "买入", j, sh, px, fee(sh * px, oc, mc), note, names.get(j, ""))
-        pos[j]["factor"] = q["factor"]
-        done.add(j)
-        return True
-
-    for b in pend["buy"]:
-        if try_buy(b["inst"], b["shares"], "清单买入"):
-            continue
-        while backups:
-            r = backups.pop(0)
-            if try_buy(r["inst"], r["shares"], f"替补（替 {code_of(b['inst'])}）"):
-                break
-
-
-def execute_conc(acc, mk, d, pend, names, cfg):
-    """K_top3：d 日开盘价成交，滑点 slip"""
-    oc, cc, mc, slip = cfg["open_cost"], cfg["close_cost"], cfg["min_cost"], cfg["slip"]
-    pos = acc.s["positions"]
-    for j in pend["sell"]:
-        if j not in pos:
-            continue
-        q = mk.quote(d, j)
-        if q["susp"] or q["dn_open"] or not q["raw_open"] > 0:
-            acc.trades.append(dict(日期=str(d.date()), 操作="卖出失败", 代码=code_of(j), 名称=names.get(j, ""), 股数=round(pos[j]["shares"], 2),
-                                   成交价="", 金额="", 费用="", 备注="开盘跌停/停牌，继续持有"))
-            continue
-        px = q["raw_open"] * (1 - slip)
-        sh = pos[j]["shares"]
-        acc.trade(d, "卖出", j, sh, px, fee(sh * px, cc, mc), pend.get("why", {}).get(j, "清单卖出"), names.get(j, ""))
-    slot = pend["slot"]
-    backups = list(pend["backup"])
-    done = set(pos)
-
-    def try_buy(j, note):
-        if j in done:
-            return False
-        q = mk.quote(d, j)
-        if q["susp"] or q["up_open"] or not q["raw_open"] > 0:
-            return False
-        px, lot = q["raw_open"] * (1 + slip), lot_of(j)
-        sh = math.floor(min(slot, acc.s["cash"]) / (1 + oc) / (px * lot)) * lot
-        while sh > 0 and sh * px + fee(sh * px, oc, mc) > acc.s["cash"]:
-            sh -= lot
-        if sh <= 0:
-            return False
-        acc.trade(d, "买入", j, sh, px, fee(sh * px, oc, mc), note, names.get(j, ""))
-        pos[j]["factor"] = q["factor"]
-        done.add(j)
-        return True
-
-    for b in pend["buy"]:
-        if try_buy(b["inst"], "清单买入（开盘）"):
-            continue
-        while backups:
-            r = backups.pop(0)
-            if try_buy(r["inst"], f"替补（替 {code_of(b['inst'])}）"):
-                break
-
-
-def execute_fb(acc, mk, d, pend, names):
-    """FB_dip：开盘按区间买入；收盘卖出 d 之前买入的持仓"""
-    pos = acc.s["positions"]
-    held_before = [j for j, p in pos.items() if p["buy_date"] < str(d.date())]
-    # 开盘买入
-    if pend and pend.get("cands"):
-        free = pend["K"] - len(pos)
-        opts = []
-        for c in pend["cands"]:
-            j = c["inst"]
-            if j in pos:
-                continue
-            q = mk.quote(d, j)
-            if q["susp"] or q["up_open"] or not q["raw_open"] > 0:
-                continue
-            o = round(q["raw_open"], 2)
-            if c["lo"] - 1e-9 <= o <= c["hi"] + 1e-9:
-                opts.append((o / c["ref"] - 1, j, o, q))
-        for gap, j, o, q in sorted(opts)[:max(free, 0)]:
-            px, lot = o * (1 + FB_SLIP), lot_of(j)
-            sh = math.floor(min(pend["slot"], acc.s["cash"]) / (1 + FB_BUY_COMM) / (px * lot)) * lot
-            while sh > 0 and sh * px + fee(sh * px, FB_BUY_COMM) > acc.s["cash"]:
-                sh -= lot
-            if sh <= 0:
-                continue
-            acc.trade(d, "买入", j, sh, px, fee(sh * px, FB_BUY_COMM), f"开盘低开 {gap:+.2%}，落在买入区间", names.get(j, ""))
-            pos[j]["factor"] = q["factor"]
-    # 收盘卖出
-    for j in held_before:
-        q = mk.quote(d, j)
-        p = pos[j]
-        if q["susp"] or q["dn_lim"]:
-            acc.trades.append(dict(日期=str(d.date()), 操作="卖出失败", 代码=code_of(j), 名称=names.get(j, ""), 股数=round(p["shares"], 2),
-                                   成交价="", 金额="", 费用="", 备注="收盘跌停/停牌，顺延到下一交易日"))
-            continue
-        px = q["raw_close"] * (1 - FB_SLIP)
-        sh = p["shares"]
-        acc.trade(d, "卖出", j, sh, px, fee(sh * px, FB_SELL_COMM, stamp=FB_STAMP), "买入次日收盘卖出", names.get(j, ""))
+        tmp = self.fn + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(self.s, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, self.fn)
 
 
 # ============================================================================ 生成清单（调用各策略自己的 live 工具）
@@ -448,25 +161,22 @@ def gen_signal(acc, d):
                             date=str(d.date()), r3_lookback=365, day_index=0, lookback=365)
     buf = io.StringIO()
     r3 = {}
+    ns.r3_override = acc.s.get("r3", dict(exposure=1.0, dd=0.0))
     if kind == "dropout":
         from strategies import live as A
-        orig = A.r3_state
-
-        def rec(excess, cfg):
-            out = orig(excess, cfg)
-            r3.update(expo_next=float(out[0]), expo_today=float(out[1]), dd=float(out[2]))
-            return out
-
-        A.r3_state = rec
-        try:
-            with contextlib.redirect_stdout(buf):
-                if STRATS[name]["family"] == "A":
-                    A.cmd_signal(ns)
-                else:
-                    from strategies2 import live as S2
-                    S2.cmd_signal(ns)
-        finally:
-            A.r3_state = orig
+        with contextlib.redirect_stdout(buf):
+            if STRATS[name]["family"] == "A":
+                result = A.cmd_signal(ns)
+            else:
+                from strategies2 import live as S2
+                result = S2.cmd_signal(ns)
+        r3.update(expo_next=float(ns.r3_override["exposure"]), dd=float(ns.r3_override.get("dd", 0)))
+        if "reference" in acc.s:
+            cfg = strat_cfg(name)
+            sell, buy, backup, _ = dropout_orders(result.attrs["score"], list(acc.s["reference"]["positions"]),
+                                                  cfg["topk"], cfg["n_drop"], result.attrs["eligible"])
+            acc.s["reference_pending"] = dict(sell=sell, buy=[dict(inst=j) for j in buy],
+                                               backup=[dict(inst=j) for j in backup], expo_next=1.0)
         fn = f"strategies/signals/{name}_{d.date()}.csv"
     elif kind == "conc":
         from strategies2 import live as S2
@@ -497,6 +207,7 @@ def gen_signal(acc, d):
         pend["buy"] = [dict(inst=inst_of(c)) for c in out.loc[out["操作"] == "买入", "代码"]]
         pend["backup"] = [dict(inst=inst_of(c)) for c in out.loc[out["操作"] == "替补", "代码"]]
         pend["slot"] = acc.total() / S2S["K_top3"]["k"]
+        pend["k"] = S2S["K_top3"]["k"]
     else:
         from strategies2 import fb_live as FB
         ok = "【可以买】" in text
@@ -526,6 +237,25 @@ def strat_cfg(name):
     return STRATEGIES[name]
 
 
+def migrate_execution(acc, d):
+    if acc.s.get("execution_version") == EXECUTION_VERSION:
+        return
+    acc.s["execution_version"] = EXECUTION_VERSION
+    acc.s["execution_start"] = str(d.date())
+    if STRATS[acc.name]["kind"] == "dropout":
+        ref = copy.deepcopy({k: acc.s[k] for k in ("cash", "etf_value", "positions")})
+        ref["cash"] += ref["etf_value"]
+        ref["etf_value"] = 0.0
+        acc.s["reference"] = ref
+        old = acc.s.get("pending") or {}
+        expo = float(old.get("expo_next", 1.0))
+        # Retain an existing half-exposure regime across migration. The baseline
+        # relative drawdown starts at the entry threshold, rather than auto-unhedging.
+        dd = min(float(old.get("dd", -0.08)), -0.08) if expo < 1 else 0.0
+        acc.s["r3"] = dict(nav=1.0 + dd, peak=1.0, exposure=expo, dd=dd, last_date=str(d.date()),
+                           migration_baseline=True)
+
+
 def run_one(name, start=None, until=None):
     mk = Market()
     names = names_table()
@@ -544,6 +274,7 @@ def run_one(name, start=None, until=None):
                              中证1000累计=0.0, 超额累计=0.0, 持仓数=0, 成交笔数=0))
         acc.s["bench_cum"] = 1.0
         print(f"[{name}] 新建账户：初始资金 {INIT_CASH:,.0f}，起始日 {s.date()}", flush=True)
+        migrate_execution(acc, s)
         pend, out, text = gen_signal(acc, s)
         acc.s["pending"] = pend
         acc.s["last_date"] = str(s.date())
@@ -557,12 +288,16 @@ def run_one(name, start=None, until=None):
         return
     cfg = strat_cfg(name)
     kind = STRATS[name]["kind"]
+    if acc.s.get("execution_version") != EXECUTION_VERSION:
+        prior = pd.Timestamp(acc.s["last_date"])
+        migrate_execution(acc, prior)
+        acc.s["pending"], _, _ = gen_signal(acc, prior)
     for d in todo:
         prev_total = acc.total()
         n0 = len(acc.trades)
         pend = acc.s.get("pending")
         # 盯市到开盘之前需要先做除权折算（K/FB 开盘成交），ETF 按指数当日收益
-        acc.mark(mk, d)
+        acc.mark(mk, d, at="close" if kind == "dropout" else "open")
         acc.s["etf_value"] *= 1 + float(mk.bench.get(d, 0.0))     # 昨日持有的 ETF 吃当日收益，再按收盘成交
         if kind == "dropout" and pend:
             execute_dropout(acc, mk, d, pend, names, cfg)
@@ -571,8 +306,20 @@ def run_one(name, start=None, until=None):
         elif kind == "fb":
             execute_fb(acc, mk, d, pend, names)
         acc.mark(mk, d)
+        if kind == "dropout":
+            reference = Ledger(state=acc.s["reference"])
+            prev_ref = reference.total()
+            reference.mark(mk, d)
+            execute_dropout(reference, mk, d, acc.s["reference_pending"], names, cfg)
+            reference.mark(mk, d)
+            advance_r3(acc.s["r3"], reference.total() / prev_ref - 1, float(mk.bench.get(d, 0)), d, cfg)
         tot = acc.total()
         b = float(mk.bench.get(d, 0.0))
+        quotes = mk.day(d)
+        inpool = quotes[quotes["in_pool"]]
+        acc.s["data_quality"] = dict(date=str(d.date()), pool_count=len(inpool),
+                                      unknown_status=int((~inpool["status_known"].fillna(False)).sum()),
+                                      eligible_buys=int(inpool["buy_ok"].fillna(False).sum()))
         acc.s["bench_cum"] = acc.s.get("bench_cum", 1.0) * (1 + b)
         cum = tot / acc.s["init_cash"] - 1
         acc.navs.append(dict(日期=str(d.date()), 现金=round(acc.s["cash"], 2), 股票市值=round(acc.stock_value(), 2),
@@ -629,8 +376,12 @@ def summary():
                     lines.append("| " + " | ".join(str(x) for x in r) + " |")
             else:
                 lines.append("无操作")
+            quality = acc.s.get("data_quality", {})
+            if quality.get("unknown_status", 0):
+                lines.append(f"状态数据缺失：{quality['unknown_status']}/{quality['pool_count']} 只池内股票禁止新买入。")
             orders.append("\n".join(lines))
     md = ["# 模拟盘（每个策略独立 10 万账户）", "",
+          "> 执行v2：旧历史保留，切换日期见state.json的execution_start；[规则和限制](../EXECUTION_V2.md)。", "",
           "由 GitHub Actions 每个交易日 17:00（北京时间）自动运行：用当天收盘价成交上一交易日的清单 → 盯市 → 生成下一交易日清单。",
           "数据源当天没更新时会在之后的运行里自动补齐（按真实成交日价格）。说明见 [paper/HOWTO.md](HOWTO.md)。", "",
           "## 账户总览", "",
@@ -639,7 +390,7 @@ def summary():
           "明细：`paper/accounts/<策略>/` 下的 nav.csv（每日净值）、trades.csv（成交）、positions.csv（持仓）；"
           "每日完整清单在 `paper/signals/<日期>/`。", "",
           "## 下一交易日操作清单", *orders, "",
-          "> 仅供学习研究，不构成投资建议。模拟盘按收盘/开盘价成交，未计冲击成本，实盘会有差距。"]
+          "> 仅供学习研究，不构成投资建议。模拟盘按对应时点报价近似成交（FB为09:35首5分钟价）；缺价不买，未计真实排队和冲击成本。"]
     open(os.path.join(PAPER, "README.md"), "w", encoding="utf-8").write("\n".join(md) + "\n")
     sys.path.insert(0, PAPER)
     import report                    # 每日日报 + 历史总览（paper/report.py）
