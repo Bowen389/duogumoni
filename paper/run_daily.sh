@@ -46,7 +46,12 @@ fi
 echo "::endgroup::"
 
 echo "::group::3a) 历史ST/交易状态（失败时未知状态股票禁止新买入）"
-timeout 1200 $PY data_fetch/fetch_status.py || echo "⚠ 状态更新失败；缺失日期状态不会允许新买入"
+if timeout 600 $PY -u data_fetch/fetch_status.py; then
+  echo "ST/交易状态更新完成"
+else
+  rc=$?
+  echo "::warning::ST/交易状态更新失败 (exit=$rc)，沿用现有缓存；未知状态股票禁止新买入"
+fi
 echo "::endgroup::"
 
 echo "::group::3) 面板 + 散户因子 + 长期犯错因子"
