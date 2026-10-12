@@ -20,7 +20,7 @@ def fetch_group(args):
     codes, start, end = args
     login = bs.login()
     if login.error_code != "0":
-        raise RuntimeError(login.error_msg)
+        raise RuntimeError(f"Baostock login failed: {login.error_msg}")
     parts = []
     try:
         for inst in codes:
@@ -30,7 +30,10 @@ def fetch_group(args):
             while rs.error_code == "0" and rs.next():
                 rows.append(rs.get_row_data())
             if rs.error_code != "0":
-                print(f"status unavailable {inst}: {rs.error_msg}", file=sys.stderr)
+                msg = str(rs.error_msg)
+                if "未登录" in msg or "not login" in msg.lower() or "login" in msg.lower():
+                    raise RuntimeError(f"Baostock session lost at {inst}: {msg}")
+                print(f"status unavailable {inst}: {msg}", file=sys.stderr)
                 continue
             t = pd.DataFrame(rows, columns=["datetime", "isST", "tradestatus"])
             t["datetime"] = pd.to_datetime(t["datetime"])
@@ -62,7 +65,9 @@ def main():
     codes = sorted(set(spans.loc[spans["start"] <= end, "instrument"]) | held)
     codes = [j for j in codes if j.startswith(("SH", "SZ"))]
     import baostock as bs
-    bs.login()
+    login = bs.login()
+    if login.error_code != "0":
+        raise RuntimeError(f"Baostock basic login failed: {login.error_msg}")
     rs = bs.query_stock_basic()
     rows = []
     while rs.error_code == "0" and rs.next():
@@ -82,8 +87,10 @@ def main():
         basic.loc[risk, "observed"] = basic.loc[risk, "instrument"].map(observed).fillna(basic.loc[risk, "observed"])
     basic.to_parquet(bfp + ".tmp", index=False)
     os.replace(bfp + ".tmp", bfp)
-    with Pool(a.workers) as pool:
-        chunks = pool.map(fetch_group, [(codes[i::a.workers], str(start.date()), str(end.date())) for i in range(a.workers)])
+    # Baostock uses a process-global socket session; concurrent clients may
+    # invalidate each other. Use one session to avoid login/logout collisions.
+    print(f"Fetching status for {len(codes)} symbols, {start.date()}..{end.date()} (single session)", flush=True)
+    chunks = [fetch_group((codes, str(start.date()), str(end.date())))]
     fp = os.path.join(EXTRA, "security_status.parquet")
     old = pd.read_parquet(fp) if os.path.exists(fp) else pd.DataFrame()
     fresh = pd.concat(chunks, ignore_index=True)
