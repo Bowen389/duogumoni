@@ -13,10 +13,14 @@ mkdir -p "$RA_PROVIDER" "$RA_DATA" "$RA_EXTRA"
 
 echo "::group::1) 下载 Qlib 日线数据"
 if [ "${SKIP_DOWNLOAD:-0}" != "1" ]; then
-  curl -sSL --retry 5 --retry-delay 10 -o /tmp/qlib_bin.tar.gz \
+  curl -fSL --retry 5 --retry-delay 10 -o /tmp/qlib_bin.tar.gz \
     https://github.com/chenditc/investment_data/releases/latest/download/qlib_bin.tar.gz
   rm -rf "$RA_PROVIDER"/* && tar -xzf /tmp/qlib_bin.tar.gz -C "$RA_PROVIDER" --strip-components=1 && rm -f /tmp/qlib_bin.tar.gz
 fi
+# Refresh current bars/status directly; stale data must fail before the no-op check.
+echo "::group::1b) 直接更新当日日线与交易状态"
+timeout 1500 $PY -u data_fetch/update_daily.py
+echo "::endgroup::"
 LAST_DAY=$(tail -1 "$RA_PROVIDER/calendars/day.txt")
 echo "Qlib 数据最新交易日：$LAST_DAY"
 echo "::endgroup::"

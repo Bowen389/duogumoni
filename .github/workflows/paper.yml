@@ -1,13 +1,17 @@
 name: 模拟盘每日运行
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'data_fetch/update_daily.py'
+      - 'paper/run_daily.sh'
+      - '.github/workflows/paper.yml'
   schedule:
-    # GitHub 的 cron 用 UTC：09:00 UTC = 北京时间 17:00（周一到周五）
-    - cron: "0 9 * * 1-5"
-    # 补跑：数据源（chenditc/investment_data）有时晚于 17:00 才发布当天数据。
-    # 这两次只在还有未处理的交易日时才会真正运行，否则几十秒就结束。不需要可以删掉。
-    - cron: "0 13 * * 1-5"   # 北京时间 21:00
-    - cron: "30 0 * * 2-6"   # 北京时间次日 08:30（开盘前）
+    # 收盘后直接向 Baostock 拉当日日线；避开整点调度拥堵。
+    - cron: "47 10 * * 1-5"  # 北京时间 18:47 主任务
+    - cron: "17 12 * * 1-5"  # 北京时间 20:17 重试
+    - cron: "47 14 * * 1-5"  # 北京时间 22:47 最后重试
   workflow_dispatch:
     inputs:
       force:
