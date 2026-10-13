@@ -42,3 +42,49 @@ def test_session_failure_does_not_look_like_empty_data():
         error_msg = '用户未登录'
     with pytest.raises(RuntimeError,match='未登录'):
         rows(Result())
+
+
+@pytest.mark.parametrize('missing',[False,True])
+def test_refresh_requires_all_current_bars_before_calendar_publish(tmp_path,monkeypatch,missing):
+    import sys
+    import types
+    from data_fetch import update_daily as u
+    provider=tmp_path/'provider'; extra=tmp_path/'extra'
+    (provider/'calendars').mkdir(parents=True)
+    (provider/'instruments').mkdir()
+    (provider/'calendars/day.txt').write_text('2026-10-12\n')
+    (provider/'instruments/csi1000.txt').write_text('SZ000001\t2020-01-01\t2026-10-12\n')
+    for inst in ('sz000001','sh000852'):
+        folder=provider/'features'/inst;folder.mkdir(parents=True)
+        for field,value in dict(close=20,factor=2,volume=500,amount=10000,vwap=20).items():
+            np.array([0,value],dtype='<f4').tofile(folder/f'{field}.day.bin')
+    class Result:
+        error_code='0';error_msg=''
+        def __init__(self,frame):
+            self.fields=list(frame.columns);self.data=iter(frame.astype(str).values.tolist())
+        def next(self):
+            self.row=next(self.data,None);return self.row is not None
+        def get_row_data(self):return self.row
+    def query(code,fields,**kw):
+        frame=bars();frame['isST']=0;frame['tradestatus']=1
+        if missing and code=='sz.000001':frame=frame.iloc[:1]
+        return Result(frame[fields.split(',')])
+    fake=types.SimpleNamespace(login=lambda:types.SimpleNamespace(error_code='0'),logout=lambda:None,
+        query_trade_dates=lambda **kw:Result(pd.DataFrame(dict(calendar_date=['2026-10-12','2026-10-13'],is_trading_day=['1','1']))),
+        query_history_k_data_plus=query)
+    monkeypatch.setitem(sys.modules,'baostock',fake)
+    monkeypatch.setenv('RA_PROVIDER',str(provider));monkeypatch.setenv('RA_EXTRA',str(extra))
+    monkeypatch.chdir(tmp_path)
+    class Clock:
+        @staticmethod
+        def now(tz):return pd.Timestamp('2026-10-13',tz=tz)
+    monkeypatch.setattr(u,'datetime',Clock)
+    if missing:
+        with pytest.raises(RuntimeError,match='incomplete'):u.main()
+        assert (provider/'calendars/day.txt').read_text()=='2026-10-12\n'
+        assert not (extra/'security_status.parquet').exists()
+    else:
+        u.main()
+        assert (provider/'calendars/day.txt').read_text().splitlines()[-1]=='2026-10-13'
+        assert read_bin(provider/'features/sz000001','close',1)==pytest.approx(20.2)
+        assert len(pd.read_parquet(extra/'security_status.parquet'))==2
