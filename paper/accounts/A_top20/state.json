@@ -2,331 +2,370 @@
  "strategy": "A_top20",
  "init_cash": 100000.0,
  "start_date": "2026-09-29",
- "last_date": "2026-10-12",
- "cash": 17952.0,
+ "last_date": "2026-10-13",
+ "cash": 22776.584,
  "etf_value": 0.0,
  "positions": {
   "SH603103": {
    "shares": 200.0,
    "cost": 3169.0,
    "buy_date": "2026-09-30",
-   "last_px": 16.94,
+   "last_px": 16.81,
    "factor": 0.06593843549489975
-  },
-  "SH600167": {
-   "shares": 800.0,
-   "cost": 4525.0,
-   "buy_date": "2026-09-30",
-   "last_px": 6.18,
-   "factor": 0.6188702583312988
   },
   "SZ002960": {
    "shares": 500.0,
    "cost": 4355.0,
    "buy_date": "2026-09-30",
-   "last_px": 8.27,
+   "last_px": 8.33,
    "factor": 0.16198748350143433
   },
   "SZ301267": {
    "shares": 300.0,
    "cost": 4553.0,
    "buy_date": "2026-09-30",
-   "last_px": 15.12,
+   "last_px": 15.0,
    "factor": 0.021660471335053444
   },
   "SZ300602": {
    "shares": 100.0,
    "cost": 3493.0000000000005,
    "buy_date": "2026-09-30",
-   "last_px": 31.72,
+   "last_px": 32.01,
    "factor": 0.22444067895412445
   },
   "SH600877": {
    "shares": 400.0,
    "cost": 4493.0,
    "buy_date": "2026-09-30",
-   "last_px": 10.84,
+   "last_px": 10.73,
    "factor": 0.3668632507324219
   },
   "SZ300080": {
    "shares": 1200.0,
    "cost": 4433.0,
    "buy_date": "2026-09-30",
-   "last_px": 3.8,
+   "last_px": 3.79,
    "factor": 0.06279724836349487
   },
   "SZ300298": {
    "shares": 200.0,
    "cost": 3265.0,
    "buy_date": "2026-09-30",
-   "last_px": 16.76,
+   "last_px": 16.4,
    "factor": 0.18719063699245453
   },
   "SZ001914": {
    "shares": 500.0,
    "cost": 4705.0,
    "buy_date": "2026-09-30",
-   "last_px": 9.21,
+   "last_px": 9.14,
    "factor": 0.6214128136634827
   },
   "SZ002993": {
    "shares": 100.0,
    "cost": 3232.0000000000005,
    "buy_date": "2026-09-30",
-   "last_px": 29.99,
+   "last_px": 30.15,
    "factor": 0.03743280470371246
   },
   "SZ001267": {
    "shares": 100.0,
    "cost": 3288.0,
    "buy_date": "2026-09-30",
-   "last_px": 29.64,
+   "last_px": 30.4,
    "factor": 0.17269068956375122
   },
   "SH603279": {
    "shares": 400.0,
    "cost": 4381.0,
    "buy_date": "2026-09-30",
-   "last_px": 11.24,
+   "last_px": 10.96,
    "factor": 0.09707093238830566
   },
   "SZ300607": {
    "shares": 100.0,
    "cost": 3025.0,
    "buy_date": "2026-09-30",
-   "last_px": 28.38,
+   "last_px": 28.63,
    "factor": 0.19979192316532135
   },
   "SZ000600": {
    "shares": 600.0,
    "cost": 4307.0,
    "buy_date": "2026-09-30",
-   "last_px": 7.2,
+   "last_px": 7.12,
    "factor": 0.3237234354019165
   },
   "SH603876": {
    "shares": 200.0,
    "cost": 3452.9999999999995,
    "buy_date": "2026-09-30",
-   "last_px": 17.02,
+   "last_px": 16.61,
    "factor": 0.10107680410146713
   },
   "SH600094": {
    "shares": 1100.0,
    "cost": 4614.0,
    "buy_date": "2026-09-30",
-   "last_px": 4.44,
+   "last_px": 4.25,
    "factor": 0.15148700773715973
   },
   "SH600649": {
    "shares": 1100.0,
    "cost": 4471.0,
    "buy_date": "2026-09-30",
-   "last_px": 3.92,
+   "last_px": 3.87,
    "factor": 0.34487977623939514
   },
   "SH600651": {
    "shares": 900.0,
    "cost": 4487.0,
    "buy_date": "2026-09-30",
-   "last_px": 4.99,
+   "last_px": 4.97,
    "factor": 0.3762902319431305
   },
   "SZ002192": {
    "shares": 100.0,
    "cost": 5727.0,
    "buy_date": "2026-10-08",
-   "last_px": 53.25,
+   "last_px": 52.28,
    "factor": 0.1381365954875946
   },
   "SH603530": {
    "shares": 100.0,
    "cost": 4005.0,
    "buy_date": "2026-10-09",
-   "last_px": 39.56,
+   "last_px": 38.29,
    "factor": 0.12456140667200089
   }
  },
  "pending": {
-  "signal_date": "2026-10-12",
+  "signal_date": "2026-10-13",
   "kind": "dropout",
   "expo_next": 1.0,
-  "dd": 0.0,
+  "dd": -0.009506523717184634,
   "sell": [
-   "SH600167"
+   "SH603876"
   ],
-  "buy": [],
-  "backup": []
+  "buy": [
+   {
+    "inst": "SH600633",
+    "shares": 600
+   },
+   {
+    "inst": "SH603063",
+    "shares": 200
+   }
+  ],
+  "backup": [
+   {
+    "inst": "SH688433",
+    "shares": 0
+   },
+   {
+    "inst": "SZ300870",
+    "shares": 0
+   },
+   {
+    "inst": "SZ301489",
+    "shares": 0
+   },
+   {
+    "inst": "SH688668",
+    "shares": 0
+   },
+   {
+    "inst": "SZ002484",
+    "shares": 100
+   }
+  ]
  },
- "bench_cum": 0.9585166732777666,
+ "bench_cum": 0.9587555994933942,
  "execution_version": 2,
  "execution_start": "2026-10-09",
  "reference": {
-  "cash": 17952.0,
+  "cash": 22776.584,
   "etf_value": 0.0,
   "positions": {
    "SH603103": {
     "shares": 200.0,
     "cost": 3169.0,
     "buy_date": "2026-09-30",
-    "last_px": 16.94,
+    "last_px": 16.81,
     "factor": 0.06593843549489975
-   },
-   "SH600167": {
-    "shares": 800.0,
-    "cost": 4525.0,
-    "buy_date": "2026-09-30",
-    "last_px": 6.18,
-    "factor": 0.6188702583312988
    },
    "SZ002960": {
     "shares": 500.0,
     "cost": 4355.0,
     "buy_date": "2026-09-30",
-    "last_px": 8.27,
+    "last_px": 8.33,
     "factor": 0.16198748350143433
    },
    "SZ301267": {
     "shares": 300.0,
     "cost": 4553.0,
     "buy_date": "2026-09-30",
-    "last_px": 15.12,
+    "last_px": 15.0,
     "factor": 0.021660471335053444
    },
    "SZ300602": {
     "shares": 100.0,
     "cost": 3493.0000000000005,
     "buy_date": "2026-09-30",
-    "last_px": 31.72,
+    "last_px": 32.01,
     "factor": 0.22444067895412445
    },
    "SH600877": {
     "shares": 400.0,
     "cost": 4493.0,
     "buy_date": "2026-09-30",
-    "last_px": 10.84,
+    "last_px": 10.73,
     "factor": 0.3668632507324219
    },
    "SZ300080": {
     "shares": 1200.0,
     "cost": 4433.0,
     "buy_date": "2026-09-30",
-    "last_px": 3.8,
+    "last_px": 3.79,
     "factor": 0.06279724836349487
    },
    "SZ300298": {
     "shares": 200.0,
     "cost": 3265.0,
     "buy_date": "2026-09-30",
-    "last_px": 16.76,
+    "last_px": 16.4,
     "factor": 0.18719063699245453
    },
    "SZ001914": {
     "shares": 500.0,
     "cost": 4705.0,
     "buy_date": "2026-09-30",
-    "last_px": 9.21,
+    "last_px": 9.14,
     "factor": 0.6214128136634827
    },
    "SZ002993": {
     "shares": 100.0,
     "cost": 3232.0000000000005,
     "buy_date": "2026-09-30",
-    "last_px": 29.99,
+    "last_px": 30.15,
     "factor": 0.03743280470371246
    },
    "SZ001267": {
     "shares": 100.0,
     "cost": 3288.0,
     "buy_date": "2026-09-30",
-    "last_px": 29.64,
+    "last_px": 30.4,
     "factor": 0.17269068956375122
    },
    "SH603279": {
     "shares": 400.0,
     "cost": 4381.0,
     "buy_date": "2026-09-30",
-    "last_px": 11.24,
+    "last_px": 10.96,
     "factor": 0.09707093238830566
    },
    "SZ300607": {
     "shares": 100.0,
     "cost": 3025.0,
     "buy_date": "2026-09-30",
-    "last_px": 28.38,
+    "last_px": 28.63,
     "factor": 0.19979192316532135
    },
    "SZ000600": {
     "shares": 600.0,
     "cost": 4307.0,
     "buy_date": "2026-09-30",
-    "last_px": 7.2,
+    "last_px": 7.12,
     "factor": 0.3237234354019165
    },
    "SH603876": {
     "shares": 200.0,
     "cost": 3452.9999999999995,
     "buy_date": "2026-09-30",
-    "last_px": 17.02,
+    "last_px": 16.61,
     "factor": 0.10107680410146713
    },
    "SH600094": {
     "shares": 1100.0,
     "cost": 4614.0,
     "buy_date": "2026-09-30",
-    "last_px": 4.44,
+    "last_px": 4.25,
     "factor": 0.15148700773715973
    },
    "SH600649": {
     "shares": 1100.0,
     "cost": 4471.0,
     "buy_date": "2026-09-30",
-    "last_px": 3.92,
+    "last_px": 3.87,
     "factor": 0.34487977623939514
    },
    "SH600651": {
     "shares": 900.0,
     "cost": 4487.0,
     "buy_date": "2026-09-30",
-    "last_px": 4.99,
+    "last_px": 4.97,
     "factor": 0.3762902319431305
    },
    "SZ002192": {
     "shares": 100.0,
     "cost": 5727.0,
     "buy_date": "2026-10-08",
-    "last_px": 53.25,
+    "last_px": 52.28,
     "factor": 0.1381365954875946
    },
    "SH603530": {
     "shares": 100.0,
     "cost": 4005.0,
     "buy_date": "2026-10-09",
-    "last_px": 39.56,
+    "last_px": 38.29,
     "factor": 0.12456140667200089
    }
   }
  },
  "r3": {
-  "nav": 1.0073501094694748,
+  "nav": 0.9977737117622947,
   "peak": 1.0073501094694748,
   "exposure": 1.0,
-  "dd": 0.0,
-  "last_date": "2026-10-12",
+  "dd": -0.009506523717184634,
+  "last_date": "2026-10-13",
   "migration_baseline": true
  },
  "reference_pending": {
   "sell": [
-   "SH600167"
+   "SH603876"
   ],
-  "buy": [],
-  "backup": [],
+  "buy": [
+   {
+    "inst": "SH600633"
+   },
+   {
+    "inst": "SH603063"
+   }
+  ],
+  "backup": [
+   {
+    "inst": "SH688433"
+   },
+   {
+    "inst": "SZ300870"
+   },
+   {
+    "inst": "SZ301489"
+   },
+   {
+    "inst": "SH688668"
+   },
+   {
+    "inst": "SZ002484"
+   }
+  ],
   "expo_next": 1.0
  },
  "data_quality": {
-  "date": "2026-10-12",
+  "date": "2026-10-13",
   "pool_count": 999,
-  "unknown_status": 999,
-  "eligible_buys": 0
+  "unknown_status": 0,
+  "eligible_buys": 999
  }
 }
