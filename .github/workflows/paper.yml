@@ -4,14 +4,15 @@ on:
   push:
     branches: [main]
     paths:
-      - 'data_fetch/update_daily.py'
+      - 'data_fetch/check_freshness.py'
+      - 'data_fetch/fetch_status.py'
       - 'paper/run_daily.sh'
       - '.github/workflows/paper.yml'
   schedule:
-    # 收盘后直接向 Baostock 拉当日日线；避开整点调度拥堵。
-    - cron: "47 10 * * 1-5"  # 北京时间 18:47 主任务
-    - cron: "17 12 * * 1-5"  # 北京时间 20:17 重试
-    - cron: "47 14 * * 1-5"  # 北京时间 22:47 最后重试
+    # 批量数据包优先，日期未到当天则失败并等待下一次重试。
+    - cron: "15 13 * * 1-5"  # 北京时间 21:15 主任务
+    - cron: "15 15 * * 1-5"  # 北京时间 23:15 重试
+    - cron: "15 23 * * 0-4"  # 北京时间次日 07:15 最后重试
   workflow_dispatch:
     inputs:
       force:

@@ -17,9 +17,10 @@ if [ "${SKIP_DOWNLOAD:-0}" != "1" ]; then
     https://github.com/chenditc/investment_data/releases/latest/download/qlib_bin.tar.gz
   rm -rf "$RA_PROVIDER"/* && tar -xzf /tmp/qlib_bin.tar.gz -C "$RA_PROVIDER" --strip-components=1 && rm -f /tmp/qlib_bin.tar.gz
 fi
-# Refresh current bars/status directly; stale data must fail before the no-op check.
-echo "::group::1b) 直接更新当日日线与交易状态"
-timeout 1500 $PY -u data_fetch/update_daily.py
+# A stale archive must never produce a successful "already current" result.
+echo "::endgroup::"
+echo "::group::1b) 按独立交易日历校验数据日期"
+timeout 90 $PY -u -m data_fetch.check_freshness
 echo "::endgroup::"
 LAST_DAY=$(tail -1 "$RA_PROVIDER/calendars/day.txt")
 echo "Qlib 数据最新交易日：$LAST_DAY"
@@ -49,13 +50,8 @@ if ! timeout 300 $PY data_fetch/fetch_industry.py; then
 fi
 echo "::endgroup::"
 
-echo "::group::3a) 历史ST/交易状态（失败时未知状态股票禁止新买入）"
-if timeout 600 $PY -u data_fetch/fetch_status.py; then
-  echo "ST/交易状态更新完成"
-else
-  rc=$?
-  echo "::warning::ST/交易状态更新失败 (exit=$rc)，沿用现有缓存；未知状态股票禁止新买入"
-fi
+echo "::group::3a) 按缺失交易日批量获取状态"
+timeout 300 $PY -u data_fetch/fetch_status.py
 echo "::endgroup::"
 
 echo "::group::3) 面板 + 散户因子 + 长期犯错因子"
