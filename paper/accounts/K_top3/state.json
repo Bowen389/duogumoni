@@ -2,41 +2,41 @@
  "strategy": "K_top3",
  "init_cash": 100000.0,
  "start_date": "2026-09-29",
- "last_date": "2026-10-13",
+ "last_date": "2026-10-15",
  "cash": 100000.0,
  "etf_value": 0.0,
  "positions": {},
  "pending": {
-  "signal_date": "2026-10-13",
+  "signal_date": "2026-10-15",
   "kind": "conc",
   "sell": [],
   "why": {},
   "buy": [],
   "backup": [
    {
-    "inst": "SH605376"
-   },
-   {
     "inst": "SH688141"
    },
    {
-    "inst": "SH688068"
+    "inst": "SH688668"
    },
    {
     "inst": "SZ002484"
    },
    {
-    "inst": "SH688146"
+    "inst": "SH688048"
+   },
+   {
+    "inst": "SZ301396"
    }
   ],
   "slot": 33333.333333333336,
   "k": 3
  },
- "bench_cum": 0.9587555994933942,
+ "bench_cum": 0.911717512483823,
  "execution_version": 2,
  "execution_start": "2026-10-09",
  "data_quality": {
-  "date": "2026-10-13",
+  "date": "2026-10-15",
   "pool_count": 999,
   "unknown_status": 0,
   "eligible_buys": 999
