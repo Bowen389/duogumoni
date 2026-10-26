@@ -91,11 +91,8 @@ def build():
         stock_parts.append(f[p["in_pool"]].reset_index(drop=True))
         # 市场情绪：按日汇总（加和，后面合并各分块）
         prev_up = up.groupby(p["instrument"], sort=False).shift(1).fillna(False).astype(bool)
-        # 情绪统计剔除上市不满 60 个交易日的新股（新股连续一字板会严重扭曲涨停/连板/接力指标）
-        age = act.astype(int).groupby(p["instrument"], sort=False).cumsum()
-        act, up, touch, zb = act & (age >= 60), up & (age >= 60), touch & (age >= 60), zb & (age >= 60)
-        prev_up = prev_up & (age >= 61)
-        lb = lb.where(age >= 60, 0)
+        # 情绪统计不设60日门槛；沿用当日正常交易、状态已知、非ST/退市过滤。
+        # 不用历史状态缓存的累计天数代替上市年龄，避免有效样本被全部清空。
         m = pd.DataFrame({"datetime": p["datetime"], "n": act.astype(int), "up": up.astype(int),
                           "dn": (p["dn_lim"] & act).astype(int), "touch": touch.astype(int), "zb": zb.astype(int),
                           "lb2": (lb >= 2).astype(int), "lbmax": lb,
