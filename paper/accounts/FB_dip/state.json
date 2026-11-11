@@ -2,22 +2,22 @@
  "strategy": "FB_dip",
  "init_cash": 100000.0,
  "start_date": "2026-09-29",
- "last_date": "2026-11-10",
+ "last_date": "2026-11-11",
  "cash": 103863.40768450002,
  "etf_value": 0.0,
  "positions": {},
  "pending": {
-  "signal_date": "2026-11-10",
+  "signal_date": "2026-11-11",
   "kind": "fb",
   "cands": [],
   "K": 2,
   "slot": 51931.70384225001
  },
- "bench_cum": 0.8981632672617326,
+ "bench_cum": 0.9104752852110388,
  "execution_version": 2,
  "execution_start": "2026-10-09",
  "data_quality": {
-  "date": "2026-11-10",
+  "date": "2026-11-11",
   "pool_count": 999,
   "unknown_status": 0,
   "eligible_buys": 999
