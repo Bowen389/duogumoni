@@ -2,41 +2,55 @@
  "strategy": "FB_dip",
  "init_cash": 100000.0,
  "start_date": "2026-09-29",
- "last_date": "2026-11-16",
- "cash": 103863.40768450002,
+ "last_date": "2026-11-17",
+ "cash": 52895.764958500025,
  "etf_value": 0.0,
- "positions": {},
+ "positions": {
+  "SH603118": {
+   "shares": 3600.0,
+   "cost": 50967.642726,
+   "buy_date": "2026-11-17",
+   "last_px": 14.8,
+   "factor": 0.14907266199588776
+  }
+ },
  "pending": {
-  "signal_date": "2026-11-16",
+  "signal_date": "2026-11-17",
   "kind": "fb",
   "cands": [
    {
-    "inst": "SH603118",
-    "lo": 13.68,
-    "hi": 14.42,
-    "ref": 14.71
+    "inst": "SH600206",
+    "lo": 36.58,
+    "hi": 38.54,
+    "ref": 39.33
    },
    {
-    "inst": "SH603983",
-    "lo": 24.86,
-    "hi": 26.2,
-    "ref": 26.73
+    "inst": "SH600619",
+    "lo": 12.18,
+    "hi": 12.84,
+    "ref": 13.1
    },
    {
-    "inst": "SZ000628",
-    "lo": 43.29,
-    "hi": 45.62,
-    "ref": 46.55
+    "inst": "SH603297",
+    "lo": 107.81,
+    "hi": 113.61,
+    "ref": 115.93
+   },
+   {
+    "inst": "SZ002226",
+    "lo": 5.07,
+    "hi": 5.34,
+    "ref": 5.45
    }
   ],
   "K": 2,
-  "slot": 51931.70384225001
+  "slot": 53087.88247925001
  },
- "bench_cum": 0.8415461664710693,
+ "bench_cum": 0.8316859024546664,
  "execution_version": 2,
  "execution_start": "2026-10-09",
  "data_quality": {
-  "date": "2026-11-16",
+  "date": "2026-11-17",
   "pool_count": 998,
   "unknown_status": 0,
   "eligible_buys": 998
