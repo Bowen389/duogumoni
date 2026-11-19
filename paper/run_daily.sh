@@ -20,7 +20,11 @@ fi
 # A stale archive must never produce a successful "already current" result.
 echo "::endgroup::"
 echo "::group::1b) 按独立交易日历校验数据日期"
-timeout 90 $PY -u -m data_fetch.check_freshness
+if ! timeout 90 $PY -u -m data_fetch.check_freshness; then
+  echo "批量数据包尚未发布；启用独立日线增量并校验复权和成交量单位"
+  timeout 2400 $PY -u -m data_fetch.update_daily
+  timeout 90 $PY -u -m data_fetch.check_freshness
+fi
 echo "::endgroup::"
 LAST_DAY=$(tail -1 "$RA_PROVIDER/calendars/day.txt")
 echo "Qlib 数据最新交易日：$LAST_DAY"
