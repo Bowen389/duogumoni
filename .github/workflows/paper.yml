@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'data_fetch/check_freshness.py'
+      - 'data_fetch/update_daily.py'
       - 'data_fetch/fetch_status.py'
       - 'paper/run_daily.sh'
       - '.github/workflows/paper.yml'
@@ -37,6 +38,7 @@ jobs:
       FORCE: ${{ inputs.force && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
+      - run: git pull --ff-only origin main
 
       - uses: actions/setup-python@v5
         with:
