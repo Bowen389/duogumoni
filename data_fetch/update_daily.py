@@ -7,7 +7,7 @@ prices into adjusted history. Calendar publication is the final commit point.
 import json
 import os
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
@@ -76,7 +76,9 @@ def main():
     calfp = root / 'calendars/day.txt'
     days = calfp.read_text().splitlines()
     last = days[-1]
-    today = datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat()
+    now = datetime.now(ZoneInfo('Asia/Shanghai'))
+    today = now.date().isoformat()
+    cutoff = (now.date()-timedelta(days=int(now.hour<16))).isoformat()
     login = bs.login()
     if login.error_code != '0':
         raise RuntimeError(login.error_msg)
@@ -84,10 +86,13 @@ def main():
         dates = rows(bs.query_trade_dates(start_date=last, end_date=today))
         if dates.empty or today not in set(dates.calendar_date):
             raise RuntimeError('Trading calendar does not cover today')
-        expected = dates.loc[dates.is_trading_day.eq('1'), 'calendar_date'].tolist()
+        expected = dates.loc[dates.is_trading_day.eq('1') & dates.calendar_date.le(cutoff), 'calendar_date'].tolist()
         if not expected:
             raise RuntimeError('Independent trading calendar unavailable')
         target = expected[-1]
+        if target == last:
+            print(f'DATA_READY archive already covers {target}', flush=True)
+            return
         newdays = [d for d in expected if d > last]
         spans = pd.read_csv(root / 'instruments/csi1000.txt', sep='\t', header=None, names=['instrument','start','end'])
         codes = set(spans.loc[spans.end.ge(last), 'instrument'])
