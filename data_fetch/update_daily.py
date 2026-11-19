@@ -69,6 +69,26 @@ def append_bin(folder, field, values, calendar):
     os.replace(tmp, fp)
 
 
+def overlap_anchor(folder, numeric, last, calendar):
+    """Use the newest fully observed liquid overlap, not an invalid last bar."""
+    liquid = numeric.loc[numeric.index <= last].query('volume > 0 and amount > 0 and close > 0')
+    for day in reversed(liquid.index):
+        if day not in calendar:
+            continue
+        q = liquid.loc[day]
+        observed = {f:read_bin(folder,f,calendar[day]) for f in ('close','factor','volume','amount','vwap')}
+        if not all(np.isfinite(observed[f]) and observed[f] > 0 for f in ('close','factor','volume','amount')):
+            continue
+        if abs(observed['close']/observed['factor']/q.close-1) > .002:
+            continue
+        old = dict(close=observed['close'], factor=observed['factor'],
+                   volume_scale=observed['volume']*observed['factor']/q.volume,
+                   amount_scale=observed['amount']/q.amount,
+                   vwap_scale=(observed['vwap']/(observed['amount']/observed['volume']) if np.isfinite(observed['vwap']) and observed['vwap']>0 else 1.))
+        return day, old
+    raise ValueError('No verified liquid normalization overlap in archive')
+
+
 def main():
     import baostock as bs
     root = Path(os.environ['RA_PROVIDER'])
@@ -134,20 +154,8 @@ def main():
                             data[field] *= scale
                         updates.append((folder,data[['open','high','low','close','change']]))
                         continue
-                    old = {f:read_bin(folder,f,calendar[last]) for f in ('close','factor')}
-                    liquid = numeric.loc[numeric.index <= last].query('volume > 0').tail(1)
-                    if liquid.empty:
-                        raise ValueError('No liquid overlap to validate units')
-                    d = liquid.index[0]; q = liquid.iloc[0]
-                    fac = read_bin(folder,'factor',calendar[d])
-                    old['volume_scale'] = read_bin(folder,'volume',calendar[d])*fac/q.volume
-                    old['amount_scale'] = read_bin(folder,'amount',calendar[d])/q.amount
-                    av = read_bin(folder,'vwap',calendar[d])
-                    aa = read_bin(folder,'amount',calendar[d]); vv = read_bin(folder,'volume',calendar[d])
-                    old['vwap_scale'] = av/(aa/vv) if np.isfinite(av) else 1.
-                    if not all(np.isfinite(old[x]) and old[x] > 0 for x in old):
-                        raise ValueError('Invalid normalization anchor')
-                    updates.append((folder,normalized(raw,last,old).loc[newdays]))
+                    anchor, old = overlap_anchor(folder, numeric, last, calendar)
+                    updates.append((folder,normalized(raw,anchor,old).loc[newdays]))
             except Exception as e:
                 failures.append(f'{inst}: {e}')
             if i % 100 == 0:
