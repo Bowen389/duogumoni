@@ -88,3 +88,24 @@ def test_refresh_requires_all_current_bars_before_calendar_publish(tmp_path,monk
         assert (provider/'calendars/day.txt').read_text().splitlines()[-1]=='2026-10-13'
         assert read_bin(provider/'features/sz000001','close',1)==pytest.approx(20.2)
         assert len(pd.read_parquet(extra/'security_status.parquet'))==2
+
+def test_overlap_anchor_skips_invalid_latest_archive_bar(tmp_path):
+    from data_fetch.update_daily import overlap_anchor
+    numeric=pd.DataFrame({'date':['2026-10-09','2026-10-12'], 'close':[10.,10.], 'volume':[100.,100.], 'amount':[1000.,1000.]}).set_index('date')
+    for field,value in dict(close=20.,factor=2.,volume=50.,amount=1000.,vwap=20.).items():
+        np.array([0,value,np.nan],dtype='<f4').tofile(tmp_path/f'{field}.day.bin')
+    day,old=overlap_anchor(tmp_path,numeric,'2026-10-12',{'2026-10-09':0,'2026-10-12':1})
+    assert day=='2026-10-09'
+    assert old['close']==20.
+    assert old['factor']==2.
+    assert old['volume_scale']==1.
+    assert old['amount_scale']==1.
+
+
+def test_overlap_anchor_refuses_unverified_scale(tmp_path):
+    from data_fetch.update_daily import overlap_anchor
+    numeric=pd.DataFrame({'date':['2026-10-12'],'close':[10.],'volume':[100.],'amount':[1000.]}).set_index('date')
+    for field in ['close','factor','volume','amount','vwap']:
+        np.array([0,np.nan],dtype='<f4').tofile(tmp_path/f'{field}.day.bin')
+    with pytest.raises(ValueError,match='No verified'):
+        overlap_anchor(tmp_path,numeric,'2026-10-12',{'2026-10-12':0})
