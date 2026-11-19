@@ -77,7 +77,7 @@ def test_refresh_requires_all_current_bars_before_calendar_publish(tmp_path,monk
     monkeypatch.chdir(tmp_path)
     class Clock:
         @staticmethod
-        def now(tz):return pd.Timestamp('2026-10-13',tz=tz)
+        def now(tz):return pd.Timestamp('2026-10-13 17:00',tz=tz)
     monkeypatch.setattr(u,'datetime',Clock)
     if missing:
         with pytest.raises(RuntimeError,match='incomplete'):u.main()
